@@ -4,7 +4,8 @@ from rest_framework import status
 from django.shortcuts import get_object_or_404
 from collections import defaultdict
 from .models import Patient, CommunitySDOH, PatientRiskPrediction
-from .ml_engine import get_prediction_engine
+from .ml_engine import get_prediction_engine, prediction_to_dict
+from .services import is_prediction_stale, get_or_predict_patient_risk
 
 
 class PatientPredictView(APIView):
@@ -19,8 +20,8 @@ class PatientPredictView(APIView):
     def post(self, request, patient_id):
         patient = get_object_or_404(Patient, patient_id=patient_id)
         try:
-            engine = get_prediction_engine()
-            result = engine.predict_patient(patient, save_to_db=True, verbose=False)
+            # Force recalculation upon explicit user POST
+            result = get_or_predict_patient_risk(patient, force_recalculate=True)
             
             response_data = {
                 "patient_id": result["patient_id"],
@@ -30,7 +31,8 @@ class PatientPredictView(APIView):
                 "driver": result["driver"],
                 "driver_type": result["driver_type"],
                 "shap_drivers": result["shap_drivers"],
-                "intervention": result["intervention"]
+                "intervention": result["intervention"],
+                "model_info": result.get("model_info", {})
             }
             return Response(response_data, status=status.HTTP_200_OK)
         except Exception as e:
@@ -40,7 +42,15 @@ class PatientPredictView(APIView):
             )
 
     def get(self, request, patient_id):
-        return self.post(request, patient_id)
+        patient = get_object_or_404(Patient, patient_id=patient_id)
+        try:
+            result = get_or_predict_patient_risk(patient, force_recalculate=False)
+            return Response(result, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(
+                {"error": f"Prediction retrieval failed: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class PatientListView(APIView):
@@ -48,9 +58,9 @@ class PatientListView(APIView):
     GET /api/patients/
     GET /api/members/
     
-    Returns all real database patients with matched community SDOH data,
-    real 5-class future risk, real 3-class future risk, REAL TreeSHAP drivers,
-    and dynamically calculated summary cards.
+    PREDICT-ONCE-AND-STORE:
+    Returns patient records joined directly with stored database predictions and TreeSHAP results.
+    Does NOT run ML inference or TreeSHAP on GET requests.
     """
     def get(self, request):
         engine = get_prediction_engine()
@@ -62,6 +72,12 @@ class PatientListView(APIView):
             for s in CommunitySDOH.objects.filter(tract_fips__in=fips_list)
         }
 
+        # Prefetch stored predictions in a single SQL query
+        pred_map = {
+            pred.patient_id: pred 
+            for pred in PatientRiskPrediction.objects.filter(patient__in=patients)
+        }
+
         member_list = []
         high_priority_count = 0
         clinical_dominant_count = 0
@@ -69,8 +85,14 @@ class PatientListView(APIView):
         combined_elevated_count = 0
 
         for p in patients:
-            # Predict and calculate real TreeSHAP values
-            eval_res = engine.predict_patient(p, save_to_db=True, verbose=False)
+            existing_pred = pred_map.get(p.id)
+            
+            # Use stored prediction if fresh, otherwise calculate once
+            if existing_pred and not is_prediction_stale(p, existing_pred):
+                eval_res = prediction_to_dict(existing_pred, patient=p)
+            else:
+                eval_res = engine.predict_patient(p, save_to_db=True, verbose=False)
+
             sdoh = sdoh_map.get(p.tract_fips)
 
             driver = eval_res["driver"]
@@ -142,9 +164,11 @@ class PatientListView(APIView):
                 conditions_list = ['Routine Baseline']
 
             # Build true TreeSHAP explanation bullets
+            top_shp = shap_drivers[0] if shap_drivers else {'display_name': 'SDOH Factors', 'shap_formatted': '+0.0000', 'raw_value': 'N/A'}
+            sec_shp = shap_drivers[1] if len(shap_drivers) > 1 else {'display_name': 'Clinical Profile', 'shap_formatted': '+0.0000', 'raw_value': 'N/A'}
             details = [
-                f"Primary SHAP Driver: {shap_drivers[0]['display_name']} ({shap_drivers[0]['shap_formatted']} impact, value: {shap_drivers[0]['raw_value']})",
-                f"Secondary SHAP Driver: {shap_drivers[1]['display_name']} ({shap_drivers[1]['shap_formatted']} impact, value: {shap_drivers[1]['raw_value']})",
+                f"Primary SHAP Driver: {top_shp['display_name']} ({top_shp['shap_formatted']} impact, value: {top_shp['raw_value']})",
+                f"Secondary SHAP Driver: {sec_shp['display_name']} ({sec_shp['shap_formatted']} impact, value: {sec_shp['raw_value']})",
                 eval_res["intervention"]["future_forecast"]
             ]
 
@@ -213,19 +237,20 @@ class PatientListView(APIView):
 class PatientDetailView(APIView):
     """
     GET /api/patients/<patient_id>/
-    Returns full patient features, matched Community SDOH info, and TreeSHAP risk predictions.
+    Returns full patient features, matched Community SDOH info, and stored TreeSHAP risk predictions.
     """
     def get(self, request, patient_id):
         patient = get_object_or_404(Patient, patient_id=patient_id)
         combined = patient.get_combined_features()
-        engine = get_prediction_engine()
-        eval_res = engine.predict_patient(patient, save_to_db=True, verbose=False)
+        eval_res = get_or_predict_patient_risk(patient, force_recalculate=False)
         sdoh = patient.community_sdoh
 
-        shap_drivers = eval_res["shap_drivers"]
+        shap_drivers = eval_res.get("shap_drivers", [])
+        top_shp = shap_drivers[0] if shap_drivers else {'display_name': 'SDOH Factors', 'shap_formatted': '+0.0000', 'raw_value': 'N/A'}
+        sec_shp = shap_drivers[1] if len(shap_drivers) > 1 else {'display_name': 'Clinical Profile', 'shap_formatted': '+0.0000', 'raw_value': 'N/A'}
         details = [
-            f"Primary SHAP Driver: {shap_drivers[0]['display_name']} ({shap_drivers[0]['shap_formatted']} impact, value: {shap_drivers[0]['raw_value']})",
-            f"Secondary SHAP Driver: {shap_drivers[1]['display_name']} ({shap_drivers[1]['shap_formatted']} impact, value: {shap_drivers[1]['raw_value']})",
+            f"Primary SHAP Driver: {top_shp['display_name']} ({top_shp['shap_formatted']} impact, value: {top_shp['raw_value']})",
+            f"Secondary SHAP Driver: {sec_shp['display_name']} ({sec_shp['shap_formatted']} impact, value: {sec_shp['raw_value']})",
             eval_res["intervention"]["future_forecast"]
         ]
 
@@ -253,6 +278,7 @@ class PatientDetailView(APIView):
                 "driver_type": eval_res["driver_type"],
                 "shap_drivers": shap_drivers,
                 "details": details,
+                "model_info": eval_res.get("model_info", {})
             }
         }
         return Response(response_data, status=status.HTTP_200_OK)
@@ -355,33 +381,10 @@ class CountyRiskMapView(APIView):
 
         for p in patients:
             pred = pred_map.get(p.id)
-            if not pred:
-                eval_res = engine.predict_patient(p, save_to_db=True, verbose=False)
-                pred = p.latest_prediction
+            if pred and not is_prediction_stale(p, pred):
+                eval_res = prediction_to_dict(pred, patient=p)
             else:
-                level_5 = pred.future_risk_5_level or 'Low'
-                level_3 = pred.future_risk_3_level or 'Low'
-                conf_5_pct = f"{(pred.future_risk_5_confidence or 1.0)*100:.2f}%"
-                conf_3_pct = f"{(pred.future_risk_3_confidence or 1.0)*100:.2f}%"
-                headline = pred.intervention_priority or f"{level_5} priority intervention"
-                forecast = pred.future_forecast_note or f"Future risk is projected at {level_3}."
-                eval_res = {
-                    "future_risk_5": {
-                        "level": level_5,
-                        "confidence_pct": conf_5_pct,
-                        "probabilities": pred.future_risk_5_probabilities
-                    },
-                    "future_risk_3": {
-                        "level": level_3,
-                        "confidence_pct": conf_3_pct,
-                        "probabilities": pred.future_risk_3_probabilities
-                    },
-                    "driver": f"Tract SDOH & Clinical Acuity ({level_3})",
-                    "intervention": {
-                        "action_headline": headline,
-                        "future_forecast": forecast
-                    }
-                }
+                eval_res = engine.predict_patient(p, save_to_db=True, verbose=False)
 
             sdoh = sdoh_map.get(p.tract_fips)
             county_name = sdoh.county if sdoh and sdoh.county else 'California County'

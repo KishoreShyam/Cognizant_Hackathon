@@ -18,6 +18,7 @@ CRITICAL RULES:
 
 import os
 import logging
+import hashlib
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, List
 import json
@@ -30,6 +31,10 @@ from django.conf import settings
 from .models import Patient, CommunitySDOH, PatientRiskPrediction
 
 logger = logging.getLogger(__name__)
+
+# Model Metadata & Versioning
+MODEL_NAME = 'sdoh_catboost_future_risk_model.cbm'
+MODEL_VERSION = 'catboost_v1'
 
 # Class Mappings
 FUTURE_RISK_3_MAP = {
@@ -123,6 +128,96 @@ CLINICAL_FEATURES = {
     'GROWTH_RECENT_VS_PREVIOUS_CLINICAL_BURDEN', 'CHANGE_RECENT_VS_PREVIOUS_HEALTHCARE_UTILIZATION', 
     'GROWTH_RECENT_VS_PREVIOUS_HEALTHCARE_UTILIZATION'
 }
+
+
+def compute_patient_feature_hash(patient: Patient) -> str:
+    """
+    Computes a deterministic SHA-256 hash strictly from the predictive feature inputs
+    (clinical features on Patient and community SDOH features on linked CommunitySDOH).
+    Excludes non-predictive metadata (IDs, database timestamps).
+    """
+    combined = patient.get_combined_features()
+    feature_items = []
+    
+    # Sort keys for deterministic canonical representation
+    for k in sorted(combined.keys()):
+        # Exclude non-predictive identifiers/metadata
+        if k in ['patient_id', 'PATIENT_ID', 'id', 'created_at', 'updated_at']:
+            continue
+        val = combined[k]
+        if val is None:
+            val_str = "null"
+        elif isinstance(val, (float, np.floating)):
+            val_str = f"{val:.4f}"
+        elif isinstance(val, (int, np.integer)):
+            val_str = str(val)
+        else:
+            val_str = str(val).strip().lower()
+        feature_items.append(f"{k}:{val_str}")
+    
+    payload = "|".join(feature_items)
+    return hashlib.sha256(payload.encode('utf-8')).hexdigest()
+
+
+def prediction_to_dict(prediction: PatientRiskPrediction, patient: Optional[Patient] = None) -> Dict[str, Any]:
+    """
+    Instantly transforms a stored database PatientRiskPrediction record into the
+    exact API dictionary representation without running any ML inference or TreeSHAP calculations.
+    """
+    p = patient or prediction.patient
+    level_5 = prediction.current_risk_level or 'Low'
+    conf_5 = float(prediction.current_risk_confidence or 1.0)
+    level_3 = prediction.future_risk_level or 'Low'
+    conf_3 = float(prediction.future_risk_confidence or 1.0)
+
+    # Format TreeSHAP drivers
+    shap_drivers = prediction.shap_drivers or []
+    driver = prediction.primary_driver or (
+        f"{shap_drivers[0]['display_name']} ({shap_drivers[0]['shap_formatted']} SHAP)"
+        if shap_drivers else f"SDOH Vulnerability & Clinical Acuity ({level_3})"
+    )
+    driver_type = prediction.driver_type or (
+        shap_drivers[0].get('category', 'SDOH') if shap_drivers else 'SDOH'
+    )
+
+    action_headline = prediction.intervention_priority or f"{level_5} priority intervention"
+    forecast_note = prediction.future_forecast_note or f"Future risk is projected at {level_3} (confidence: {conf_3*100:.1f}%)."
+
+    return {
+        'patient_id': p.patient_id,
+        'tract_fips': prediction.tract_fips or p.tract_fips,
+        'future_risk_5': {
+            'class': prediction.current_risk_class if prediction.current_risk_class is not None else 1,
+            'level': level_5,
+            'confidence': conf_5,
+            'confidence_pct': f"{conf_5 * 100:.2f}%",
+            'probabilities': prediction.current_risk_probabilities or {}
+        },
+        'future_risk_3': {
+            'class': prediction.future_risk_class if prediction.future_risk_class is not None else 0,
+            'level': level_3,
+            'confidence': conf_3,
+            'confidence_pct': f"{conf_3 * 100:.2f}%",
+            'probabilities': prediction.future_risk_probabilities or {}
+        },
+        'driver': driver,
+        'driver_type': driver_type,
+        'shap_drivers': shap_drivers,
+        'future_risk_5_class': level_5,
+        'future_risk_3_class': level_3,
+        'intervention': {
+            'priority_level': level_5,
+            'action_headline': action_headline,
+            'future_forecast': forecast_note
+        },
+        'model_info': {
+            'model_name': prediction.model_name or MODEL_NAME,
+            'model_version': prediction.model_version or MODEL_VERSION,
+            'input_data_hash': prediction.input_data_hash,
+            'predicted_at': str(prediction.predicted_at or prediction.updated_at),
+            'cached': True
+        }
+    }
 
 
 class SDOHPredictionEngine:
@@ -378,6 +473,9 @@ class SDOHPredictionEngine:
         # -------------------------------------------------------------
         # 5. DATABASE PERSISTENCE
         # -------------------------------------------------------------
+        input_hash = compute_patient_feature_hash(patient)
+        top_shap_val = top_shap_drivers[0]['shap_value'] if top_shap_drivers else 0.0
+
         if save_to_db:
             PatientRiskPrediction.objects.update_or_create(
                 patient=patient,
@@ -393,6 +491,13 @@ class SDOHPredictionEngine:
                     'future_risk_probabilities': probabilities_3,
                     'intervention_priority': intervention_priority,
                     'future_forecast_note': future_forecast_note,
+                    'primary_driver': primary_driver,
+                    'driver_type': driver_type,
+                    'primary_shap_value': top_shap_val,
+                    'shap_drivers': top_shap_drivers,
+                    'model_name': MODEL_NAME,
+                    'model_version': MODEL_VERSION,
+                    'input_data_hash': input_hash,
                 }
             )
 
@@ -426,10 +531,57 @@ class SDOHPredictionEngine:
                 'action_headline': intervention_priority,
                 'future_forecast': future_forecast_note
             },
+            'model_info': {
+                'model_name': MODEL_NAME,
+                'model_version': MODEL_VERSION,
+                'input_data_hash': input_hash,
+                'cached': False
+            },
             'validation': val_info
         }
 
         return result
+
+    def get_or_predict_patient(
+        self,
+        patient_id_or_instance,
+        force_recalculate: bool = False,
+        verbose: bool = False
+    ) -> Dict[str, Any]:
+        """
+        PREDICT-ONCE-AND-STORE ACCESSOR:
+        1. If patient has a stored prediction matching the current input_data_hash and model_version:
+           Reads directly from the database (NO ML model execution, NO TreeSHAP execution, < 1ms).
+        2. If prediction is missing or stale (inputs changed or model_version changed) or force=True:
+           Executes ML inference + TreeSHAP ONCE, stores to database, and returns fresh result.
+        """
+        if isinstance(patient_id_or_instance, Patient):
+            patient = patient_id_or_instance
+        else:
+            patient = Patient.objects.filter(patient_id=str(patient_id_or_instance)).first()
+            if not patient:
+                raise ValueError(f"Patient with ID '{patient_id_or_instance}' not found.")
+
+        current_hash = compute_patient_feature_hash(patient)
+        latest_pred = patient.predictions.order_by('-created_at').first()
+
+        # Check if stored prediction is valid
+        if (
+            not force_recalculate
+            and latest_pred is not None
+            and latest_pred.input_data_hash == current_hash
+            and latest_pred.model_version == MODEL_VERSION
+            and latest_pred.shap_drivers is not None
+        ):
+            # Return stored prediction directly from PostgreSQL without running ML model or SHAP
+            return prediction_to_dict(latest_pred, patient=patient)
+
+        # Stale, missing, or forced -> Calculate once and store
+        if verbose:
+            reason = "forced" if force_recalculate else ("missing" if not latest_pred else "data/version changed")
+            print(f"[Prediction Engine] Calculating prediction for {patient.patient_id} (Reason: {reason})")
+
+        return self.predict_patient(patient, save_to_db=True, verbose=verbose)
 
     def _derive_5class_from_catboost(self, patient: Patient, class_3: int, probs_3_raw: np.ndarray):
         """Derives 5-class granularity aligned with the CatBoost probabilities and patient utilization."""

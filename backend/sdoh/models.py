@@ -353,7 +353,7 @@ class PatientRiskPrediction(models.Model):
 
     # --- PRIORITY INTERVENTION ---
     intervention_priority = models.CharField(
-        max_length=50,
+        max_length=100,
         null=True,
         blank=True,
         help_text="Intervention priority headline based on 5-class future risk"
@@ -365,7 +365,52 @@ class PatientRiskPrediction(models.Model):
         help_text="Forecasting note comparing 5-class and 3-class future risk trends"
     )
 
+    # --- TREESHAP ATTRBUTION & DRIVERS ---
+    primary_driver = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text="Primary feature driver headline formatted with SHAP impact"
+    )
+    driver_type = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        help_text="Dominant risk driver category: 'Clinical', 'SDOH', or 'Combined'"
+    )
+    primary_shap_value = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="Numeric SHAP attribution value of the primary driver"
+    )
+    shap_drivers = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Full top-5 TreeSHAP feature attribution array with rank, category, and exact SHAP impact"
+    )
+
+    # --- CHANGE DETECTION & MODEL VERSIONING ---
+    model_name = models.CharField(
+        max_length=100,
+        default='sdoh_catboost_future_risk_model.cbm',
+        help_text="Name of the deployed ML model"
+    )
+    model_version = models.CharField(
+        max_length=50,
+        default='catboost_v1',
+        db_index=True,
+        help_text="Model release version tag for cache invalidation"
+    )
+    input_data_hash = models.CharField(
+        max_length=64,
+        db_index=True,
+        null=True,
+        blank=True,
+        help_text="SHA-256 hash of predictive input features for change detection"
+    )
+
     # Timestamps
+    predicted_at = models.DateTimeField(auto_now=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -27,7 +27,7 @@ const Overview: React.FC = () => {
   // Summary Cards Data
   const summaryCards = [
     { title: 'Total Members', value: '24,500', trend: 'up', subtext: '2.4% vs last month', icon: Users, color: 'text-primary', bg: 'bg-primary/10', trendColor: 'text-teal-600', spark: generateSparkData('up'), stroke: '#005599' },
-    { title: 'High Current Risk (5-Class)', value: '1,240', trend: 'up', subtext: '5.1% vs last month', icon: AlertTriangle, color: 'text-error', bg: 'bg-error/10', trendColor: 'text-error', spark: generateSparkData('up'), stroke: '#ba1a1a' },
+    { title: 'High Future Risk (5-Class)', value: '1,240', trend: 'up', subtext: '5.1% vs last month', icon: AlertTriangle, color: 'text-error', bg: 'bg-error/10', trendColor: 'text-error', spark: generateSparkData('up'), stroke: '#ba1a1a' },
     { title: 'High Social Risk', value: '850', trend: 'flat', subtext: 'Stable vs last month', icon: Globe, color: 'text-primary', bg: 'bg-primary/10', trendColor: 'text-slate-500', spark: generateSparkData('flat'), stroke: '#455668' },
     { title: 'High Future Risk (3-Class)', value: '420', trend: 'up', subtext: '12% vs last month', icon: Brain, color: 'text-error', bg: 'bg-error/10', trendColor: 'text-error', spark: generateSparkData('up'), stroke: '#ba1a1a' },
     { title: 'Priority Members', value: '156', trend: 'down', subtext: '-4.2% vs last month', icon: Flag, color: 'text-primary', bg: 'bg-primary/10', trendColor: 'text-teal-600', spark: generateSparkData('down'), stroke: '#046a64' },
@@ -235,7 +235,7 @@ const Overview: React.FC = () => {
                 <th className="p-4 w-[120px]">Member ID</th>
                 <th className="p-4 w-[110px]">Clinical Risk</th>
                 <th className="p-4 w-[110px]">Social Risk</th>
-                <th className="p-4 w-[150px]">CURRENT RISK (5-CLASS)</th>
+                <th className="p-4 w-[150px]">FUTURE RISK (5-CLASS)</th>
                 <th className="p-4 w-[100px]">Future 6M</th>
                 <th className="p-4 w-[100px]">Future 12M</th>
                 <th className="p-4 w-[180px]">Primary Driver</th>

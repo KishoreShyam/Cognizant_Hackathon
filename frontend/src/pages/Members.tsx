@@ -350,7 +350,7 @@ const Members: React.FC = () => {
           onChange={(e) => { setRiskFilter(e.target.value); setCurrentPage(1); }}
           className="py-2 pl-3 pr-8 bg-white rounded-lg border border-slate-200 text-[13px] text-on-surface outline-none focus:border-primary cursor-pointer"
         >
-          <option value="All">Current Risk (5-Class): All</option>
+          <option value="All">Future Risk (5-Class): All</option>
           <option value="Critical">Critical</option>
           <option value="High">High</option>
           <option value="Moderate">Moderate</option>
@@ -408,7 +408,7 @@ const Members: React.FC = () => {
               <tr>
                 <th className="py-3.5 px-6">Priority</th>
                 <th className="py-3.5 px-4">Patient ID</th>
-                <th className="py-3.5 px-4">CURRENT RISK (5-CLASS)</th>
+                <th className="py-3.5 px-4">FUTURE RISK (5-CLASS)</th>
                 <th className="py-3.5 px-4">SDOH RISK (COMMUNITY)</th>
                 <th className="py-3.5 px-4">FUTURE RISK (3-CLASS)</th>
                 <th className="py-3.5 px-4">PRIMARY DRIVER (TREE-SHAP)</th>
@@ -421,7 +421,7 @@ const Members: React.FC = () => {
                   <td colSpan={7} className="text-center py-16 text-on-surface-variant font-medium">
                     <div className="flex flex-col items-center justify-center gap-3">
                       <Loader2 className="w-7 h-7 text-primary animate-spin" />
-                      <span>Loading real patient & SDOH records with TreeSHAP attributions...</span>
+                      <span>Loading patient risk records...</span>
                     </div>
                   </td>
                 </tr>
@@ -589,11 +589,11 @@ const Members: React.FC = () => {
                     Future Risk Prediction Breakdown
                   </h4>
                   <div className="grid grid-cols-3 gap-2.5">
-                    {/* 5-Class Current Risk */}
+                    {/* 5-Class Future Risk */}
                     <div className="flex flex-col items-center p-3 bg-slate-50 rounded-xl border border-slate-100 text-center">
                       <span className="text-sm font-bold text-slate-800">{selectedMember.future_risk_5.level}</span>
                       <span className="text-[11px] font-bold text-error mt-0.5">{selectedMember.future_risk_5.confidence_pct}</span>
-                      <span className="text-[10px] text-slate-400 uppercase mt-1">CURRENT (5-Class)</span>
+                      <span className="text-[10px] text-slate-400 uppercase mt-1">FUTURE (5-Class)</span>
                     </div>
 
                     {/* Social/SDOH */}

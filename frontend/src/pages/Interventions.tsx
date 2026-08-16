@@ -218,7 +218,7 @@ const Interventions: React.FC = () => {
                 <th className="px-6 py-3">Member ID</th>
                 <th className="px-6 py-3">Clinical Risk</th>
                 <th className="px-6 py-3">SDOH Risk</th>
-                <th className="px-6 py-3">CURRENT RISK (5-CLASS)</th>
+                <th className="px-6 py-3">FUTURE RISK (5-CLASS)</th>
                 <th className="px-6 py-3">6M Future</th>
                 <th className="px-6 py-3">12M Future</th>
                 <th className="px-6 py-3 font-bold text-primary">Priority Score</th>
