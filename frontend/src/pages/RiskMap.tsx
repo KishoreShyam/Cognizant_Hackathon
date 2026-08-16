@@ -672,7 +672,7 @@ const RiskMap: React.FC = () => {
                         <div className="flex justify-between items-center pt-1 border-t border-slate-200/40 text-[11px] text-slate-500">
                           <span>ED: {member.ed_visits} • IP: {member.ip_visits} • Enc: {member.encounters}</span>
                           <button
-                            onClick={() => navigate('/members')}
+                            onClick={() => navigate(`/members?id=${member.id}`)}
                             className="text-primary hover:underline font-bold flex items-center gap-1 cursor-pointer"
                           >
                             <span>Analyze</span>

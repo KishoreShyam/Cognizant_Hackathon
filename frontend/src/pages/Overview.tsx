@@ -401,7 +401,7 @@ const Overview: React.FC = () => {
                   </td>
                   <td className="p-4 pr-6 text-right">
                     <button 
-                      onClick={() => navigate('/members')}
+                      onClick={() => navigate(`/members?id=${member.id}`)}
                       className="text-primary bg-primary/10 hover:bg-primary hover:text-white px-3.5 py-1 rounded-full text-[12px] font-semibold transition-all cursor-pointer"
                     >
                       Analyze

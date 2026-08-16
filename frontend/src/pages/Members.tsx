@@ -163,6 +163,7 @@ const Members: React.FC = () => {
       if (found) {
         setSelectedMember(found);
         setIsDrawerOpen(true);
+        setSearchQuery(found.id);
       }
     }
   }, [memberIdParam, members]);
