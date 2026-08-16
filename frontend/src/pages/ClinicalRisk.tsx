@@ -19,6 +19,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
 interface ClinicalCohortMember {
   id: string;
   patient_id: string;
+  name?: string;
   score: number;
   conditions: string[];
   utilization: string;
@@ -66,6 +67,7 @@ const ClinicalRisk: React.FC = () => {
         return {
           id: m.patient_id,
           patient_id: m.patient_id,
+          name: m.name || `Patient ${m.patient_id}`,
           score: calcScore,
           conditions: m.conditions || ['Baseline Management'],
           utilization: `${ed} / ${ip}`,
@@ -323,7 +325,12 @@ const ClinicalRisk: React.FC = () => {
 
               {!isLoading && paginatedMembers.map((member) => (
                 <tr key={member.id} className="hover:bg-slate-50/30 transition-colors">
-                  <td className="py-4 px-6 font-semibold text-primary">{member.id}</td>
+                  <td className="py-4 px-6 font-semibold text-primary">
+                    <div className="flex flex-col">
+                      <span className="font-bold text-slate-900 text-[13px]">{member.name || member.id}</span>
+                      <span className="text-[11px] font-mono text-primary font-semibold">{member.id}</span>
+                    </div>
+                  </td>
                   <td className="py-4 px-4 font-bold text-error">{member.score}%</td>
                   <td className="py-4 px-4 font-medium text-slate-600 truncate max-w-[220px]">
                     {member.conditions.join(', ')}
@@ -383,8 +390,8 @@ const ClinicalRisk: React.FC = () => {
               {/* Header */}
               <div className="p-6 border-b border-slate-200 flex justify-between items-center bg-slate-50/50 shrink-0">
                 <div>
-                  <h3 className="text-lg font-bold text-on-surface">Clinical Risk Profile</h3>
-                  <p className="text-[13px] text-primary font-bold">Member: {selectedMember.id}</p>
+                  <h3 className="text-lg font-bold text-on-surface">{selectedMember.name || selectedMember.id}</h3>
+                  <p className="text-[13px] text-primary font-bold">Member ID: {selectedMember.id}</p>
                 </div>
                 <button className="p-1.5 text-on-surface-variant hover:bg-slate-200/60 rounded-full transition-colors cursor-pointer" onClick={() => setIsDrawerOpen(false)}>
                   <X className="w-5 h-5" />

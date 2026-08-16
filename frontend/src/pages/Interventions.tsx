@@ -14,6 +14,7 @@ import {
 
 interface InterventionCandidate {
   id: string;
+  name?: string;
   priority: string;
   priorityColor: string;
   clinicalRisk: string;
@@ -267,7 +268,12 @@ const Interventions: React.FC = () => {
                       {candidate.priority}
                     </span>
                   </td>
-                  <td className="px-6 py-4 font-semibold text-primary">{candidate.id}</td>
+                  <td className="px-6 py-4">
+                    <div className="flex flex-col">
+                      <span className="font-bold text-slate-900 text-[13px]">{candidate.name || candidate.id}</span>
+                      <span className="text-[11px] font-mono text-primary font-semibold">{candidate.id}</span>
+                    </div>
+                  </td>
                   <td className="px-6 py-4 font-medium">{candidate.clinicalRisk}</td>
                   <td className="px-6 py-4 font-medium">{candidate.sdohRisk}</td>
                   <td className="px-6 py-4 font-bold text-error">{candidate.future_risk_5}</td>
@@ -322,12 +328,14 @@ const Interventions: React.FC = () => {
               <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
                 <div>
                   <h3 className="text-lg font-bold text-on-surface flex items-center gap-2">
-                    {selectedCandidate.id}
+                    {selectedCandidate.name || selectedCandidate.id}
                     <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${selectedCandidate.priorityColor}`}>
                       {selectedCandidate.priority}
                     </span>
                   </h3>
-                  <p className="text-xs text-on-surface-variant mt-0.5">Census Tract {selectedCandidate.tract_fips} • {selectedCandidate.county}</p>
+                  <p className="text-xs text-on-surface-variant mt-0.5">
+                    Member ID: {selectedCandidate.id} • Census Tract {selectedCandidate.tract_fips} • {selectedCandidate.county}
+                  </p>
                 </div>
                 <button 
                   onClick={() => setIsDrawerOpen(false)}

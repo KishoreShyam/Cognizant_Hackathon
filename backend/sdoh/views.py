@@ -175,6 +175,7 @@ class PatientListView(APIView):
             member_list.append({
                 "id": p.patient_id,
                 "patient_id": p.patient_id,
+                "name": p.name or f"Patient {p.patient_id}",
                 "tract_fips": p.tract_fips,
                 "county": sdoh.county if sdoh else 'California',
                 "state": sdoh.state if sdoh else 'CA',
@@ -255,7 +256,8 @@ class PatientDetailView(APIView):
         ]
 
         response_data = {
-            "patient": combined,
+            "patient": {**combined, "name": patient.name or f"Patient {patient.patient_id}"},
+            "name": patient.name or f"Patient {patient.patient_id}",
             "sdoh": {
                 "tract_fips": patient.tract_fips,
                 "county": sdoh.county if sdoh else "California",
@@ -430,6 +432,7 @@ class CountyRiskMapView(APIView):
 
                 county_member_details.append({
                     "id": p.patient_id,
+                    "name": p.name or f"Patient {p.patient_id}",
                     "tract_fips": p.tract_fips,
                     "future_risk_5": level_5,
                     "future_risk_5_confidence_pct": eval_res["future_risk_5"]["confidence_pct"],
@@ -539,6 +542,7 @@ class CountyRiskMapView(APIView):
                 t_driver_counts[driver] += 1
                 tract_member_details.append({
                     "id": p.patient_id,
+                    "name": p.name or f"Patient {p.patient_id}",
                     "tract_fips": p.tract_fips,
                     "future_risk_5": level_5,
                     "future_risk_5_confidence_pct": eval_res["future_risk_5"]["confidence_pct"],
@@ -737,6 +741,7 @@ class OverviewView(APIView):
 
             patient_priority_rows.append({
                 "id": p.patient_id,
+                "name": p.name or f"Patient {p.patient_id}",
                 "priority": level_5,
                 "priorityColor": "bg-error/10 text-error border-error/20" if level_5 in ['Critical', 'High'] else ("bg-amber-100 text-amber-800 border-amber-200" if level_5 == 'Moderate' else "bg-teal-100 text-teal-800 border-teal-200"),
                 "clinical": f"{clinical_score}%",
@@ -866,6 +871,7 @@ class InterventionsView(APIView):
 
             candidates.append({
                 "id": p.patient_id,
+                "name": p.name or f"Patient {p.patient_id}",
                 "priority": level_5,
                 "priorityColor": priority_color,
                 "clinicalRisk": f"{int(min(98, max(15, int(p.encounters_last_12m or 0) * 4 + int(p.emergency_visits_last_12m or 0) * 15)))}%",

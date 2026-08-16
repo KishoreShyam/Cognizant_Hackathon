@@ -14,6 +14,7 @@ import {
 
 interface MemberDetail {
   id: string;
+  name?: string;
   tract_fips: string;
   future_risk_5: string;
   future_risk_5_confidence_pct: string;
@@ -654,7 +655,10 @@ const RiskMap: React.FC = () => {
                         className="p-3.5 bg-slate-50/70 hover:bg-slate-100/70 transition-all rounded-xl border border-slate-200/60 flex flex-col gap-2"
                       >
                         <div className="flex justify-between items-center">
-                          <span className="font-bold text-primary text-[13px]">{member.id}</span>
+                          <div className="flex flex-col">
+                            <span className="font-bold text-slate-900 text-[13px]">{member.name || member.id}</span>
+                            <span className="text-[11px] font-mono text-primary font-semibold">{member.id}</span>
+                          </div>
                           <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                             member.future_risk_5 === 'Critical' ? 'bg-error/10 text-error border border-error/20' :
                             member.future_risk_5 === 'High' ? 'bg-rose-100 text-rose-800 border border-rose-200' :

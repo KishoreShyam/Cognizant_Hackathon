@@ -62,6 +62,7 @@ interface ShapDriver {
 interface Member {
   id: string;
   patient_id: string;
+  name?: string;
   tract_fips: string;
   county: string;
   state: string;
@@ -186,6 +187,7 @@ const Members: React.FC = () => {
       const matchesSearch = 
         !q ||
         m.id.toLowerCase().includes(q) || 
+        (m.name && m.name.toLowerCase().includes(q)) ||
         m.tract_fips.toLowerCase().includes(q) ||
         m.county.toLowerCase().includes(q) ||
         m.driver.toLowerCase().includes(q) ||
@@ -437,11 +439,12 @@ const Members: React.FC = () => {
                     </span>
                   </td>
 
-                  {/* Patient ID */}
+                  {/* Patient Name & ID */}
                   <td className="py-4 px-4">
                     <div className="flex flex-col">
-                      <span className="font-semibold text-primary">{member.id}</span>
-                      <span className="text-[10px] text-slate-400 font-mono">Tract: {member.tract_fips}</span>
+                      <span className="font-bold text-slate-900 text-[13px]">{member.name || member.id}</span>
+                      <span className="text-[11px] font-mono text-primary font-semibold">{member.id}</span>
+                      <span className="text-[10px] text-slate-400 font-mono mt-0.5">Tract: {member.tract_fips}</span>
                     </div>
                   </td>
                   
@@ -550,11 +553,14 @@ const Members: React.FC = () => {
               <div className="flex items-center justify-between p-6 border-b border-slate-200 bg-slate-50/70 shrink-0">
                 <div>
                   <div className="flex items-center gap-2">
-                    <h3 className="text-lg font-bold text-on-surface">Member Risk Deep-Dive</h3>
+                    <h3 className="text-xl font-bold text-on-surface">{selectedMember.name || selectedMember.id}</h3>
                     {getRiskBadge(selectedMember.future_risk_5.level)}
                   </div>
                   <div className="flex items-center gap-2 mt-1">
-                    <span className="text-[13px] text-primary font-mono font-bold">{selectedMember.id}</span>
+                    <span className="text-[12px] text-primary font-mono font-bold">{selectedMember.id}</span>
+                    <span className="text-[11px] px-2 py-0.2 rounded-full bg-slate-200/80 font-bold text-slate-700">
+                      {selectedMember.county}
+                    </span>
                     <span className="text-[11px] px-2 py-0.2 rounded-full bg-slate-200/80 font-bold text-slate-700">
                       {selectedMember.gender || 'Demographics Verified'}
                     </span>

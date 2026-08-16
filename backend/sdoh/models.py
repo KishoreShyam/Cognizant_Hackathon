@@ -128,6 +128,12 @@ class Patient(models.Model):
         db_index=True,
         help_text="Unique patient identifier (string)"
     )
+    name = models.CharField(
+        max_length=150,
+        blank=True,
+        default="",
+        help_text="Patient full name"
+    )
     snapshot_date = models.DateField(
         null=True,
         blank=True,

@@ -54,6 +54,7 @@ interface SDOHImpactData {
 
 interface PriorityMemberItem {
   id: string;
+  name?: string;
   priority: string;
   priorityColor: string;
   clinical: string;
@@ -386,7 +387,12 @@ const Overview: React.FC = () => {
                       {member.priority}
                     </span>
                   </td>
-                  <td className="p-4 font-semibold text-primary whitespace-nowrap">{member.id}</td>
+                  <td className="p-4 whitespace-nowrap">
+                    <div className="flex flex-col">
+                      <span className="font-bold text-slate-900 text-[13px]">{member.name || member.id}</span>
+                      <span className="text-[11px] font-mono text-primary font-semibold">{member.id}</span>
+                    </div>
+                  </td>
                   <td className="p-4 text-error font-semibold whitespace-nowrap">{member.clinical}</td>
                   <td className="p-4 text-error font-semibold whitespace-nowrap">{member.social}</td>
                   <td className="p-4 font-bold text-error whitespace-nowrap">{member.future_risk_5}</td>
