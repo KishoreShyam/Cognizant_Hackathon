@@ -7,13 +7,12 @@ import {
   MapPin, 
   Users, 
   RefreshCw, 
-  Loader2,
-  ExternalLink,
-  ShieldAlert,
-  Sparkles
+  Loader2, 
+  Sparkles, 
+  Search 
 } from 'lucide-react';
 
-interface CountyMember {
+interface MemberDetail {
   id: string;
   tract_fips: string;
   future_risk_5: string;
@@ -27,8 +26,12 @@ interface CountyMember {
   ip_visits: number;
 }
 
-interface CountyData {
+interface RegionData {
+  id: string;
   name: string;
+  county?: string;
+  tract_fips?: string;
+  type: 'county' | 'tract';
   lat: number;
   lng: number;
   total_members: number;
@@ -48,6 +51,20 @@ interface CountyData {
     Moderate: number;
     Low: number;
   };
+  primary_driver?: string;
+  driver_type?: string;
+  sdoh_metrics?: {
+    poverty: number;
+    housing_burden: number;
+    income: number;
+    unemployment: number;
+    uninsured: number;
+    food_access: number;
+    no_vehicle: number;
+    disability: number;
+    broadband: number;
+    education: number;
+  };
   sdoh_averages: {
     poverty: number;
     housing_burden: number;
@@ -56,119 +73,172 @@ interface CountyData {
     food_access: number;
   };
   drivers: { name: string; count: number; percentage: number; color: string }[];
-  members: CountyMember[];
+  members: MemberDetail[];
 }
 
 interface MapApiResponse {
   total_counties: number;
+  total_tracts: number;
   total_members: number;
   total_high_risk_members: number;
-  counties: CountyData[];
+  counties: RegionData[];
+  tracts: RegionData[];
 }
 
-// Sub-component to re-center map when county changes
-const MapRecenter: React.FC<{ lat: number; lng: number }> = ({ lat, lng }) => {
+// Sub-component to re-center map when selection changes
+const MapRecenter: React.FC<{ lat: number; lng: number; zoom?: number }> = ({ lat, lng, zoom }) => {
   const map = useMap();
   useEffect(() => {
     if (lat && lng) {
-      map.setView([lat, lng], Math.max(map.getZoom(), 7), { animate: true });
+      map.setView([lat, lng], zoom || Math.max(map.getZoom(), 7), { animate: true });
     }
-  }, [lat, lng, map]);
+  }, [lat, lng, zoom, map]);
   return null;
 };
 
 const RiskMap: React.FC = () => {
   const navigate = useNavigate();
 
-  const [counties, setCounties] = useState<CountyData[]>([]);
+  const [counties, setCounties] = useState<RegionData[]>([]);
+  const [tracts, setTracts] = useState<RegionData[]>([]);
   const [totalMembers, setTotalMembers] = useState(0);
   const [totalHighRisk, setTotalHighRisk] = useState(0);
-  const [selectedCounty, setSelectedCounty] = useState<CountyData | null>(null);
   
+  // Selection
+  const [selectedRegion, setSelectedRegion] = useState<RegionData | null>(null);
+  
+  // View Modes: 'county' | 'tract'
+  const [viewMode, setViewMode] = useState<'county' | 'tract'>('county');
+  
+  // Risk Perspective / Metric Layer: 'future5' | 'future3' | 'sdoh'
+  const [riskPerspective, setRiskPerspective] = useState<'future5' | 'future3' | 'sdoh'>('future5');
+  
+  // Filters
+  const [statusFilter, setStatusFilter] = useState<string>('All');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [selectedMemberTab, setSelectedMemberTab] = useState<'overview' | 'members'>('overview');
+
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [statusFilter, setStatusFilter] = useState<string>('All');
-  const [selectedMemberTab, setSelectedMemberTab] = useState<'overview' | 'members'>('overview');
-
-  const fetchCountyData = async () => {
+  const fetchMapData = async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch('/api/map/counties/').catch(() =>
-        fetch('http://127.0.0.1:8000/api/map/counties/')
+      const response = await fetch('http://127.0.0.1:8000/api/map/counties/').catch(() =>
+        fetch('/api/map/counties/')
       );
 
       if (!response.ok) {
-        throw new Error(`Failed to load county map data (HTTP ${response.status})`);
+        throw new Error(`Failed to load map data (HTTP ${response.status})`);
       }
 
       const data: MapApiResponse = await response.json();
       setCounties(data.counties || []);
+      setTracts(data.tracts || []);
       setTotalMembers(data.total_members || 0);
       setTotalHighRisk(data.total_high_risk_members || 0);
 
-      if (data.counties && data.counties.length > 0) {
-        setSelectedCounty(data.counties[0]);
+      if (viewMode === 'county' && data.counties && data.counties.length > 0) {
+        setSelectedRegion(data.counties[0]);
+      } else if (viewMode === 'tract' && data.tracts && data.tracts.length > 0) {
+        setSelectedRegion(data.tracts[0]);
       }
     } catch (err: any) {
-      console.error('Error fetching county map data:', err);
-      setError(err.message || 'Unable to connect to the backend county map service.');
+      console.error('Error fetching map data:', err);
+      setError(err.message || 'Unable to connect to the backend map service.');
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchCountyData();
+    fetchMapData();
   }, []);
+
+  // When viewMode switches, select the top item in that dataset
+  useEffect(() => {
+    if (viewMode === 'county' && counties.length > 0) {
+      setSelectedRegion(counties[0]);
+    } else if (viewMode === 'tract' && tracts.length > 0) {
+      setSelectedRegion(tracts[0]);
+    }
+  }, [viewMode]);
+
+  // Current active dataset based on viewMode
+  const activeDataset = viewMode === 'county' ? counties : tracts;
 
   // Filter counts
   const filterCounts = useMemo(() => {
     return {
-      all: counties.length,
-      high: counties.filter(c => c.status === 'Critical' || c.status === 'Elevated').length,
-      mod: counties.filter(c => c.status === 'Moderate').length,
-      low: counties.filter(c => c.status === 'Stable').length,
+      all: activeDataset.length,
+      high: activeDataset.filter(c => c.status === 'Critical' || c.status === 'Elevated').length,
+      mod: activeDataset.filter(c => c.status === 'Moderate').length,
+      low: activeDataset.filter(c => c.status === 'Stable').length,
     };
-  }, [counties]);
+  }, [activeDataset]);
 
-  // Filter counties based on status filter
-  const filteredCounties = useMemo(() => {
-    return counties.filter(c => {
+  // Filtered items based on statusFilter and searchQuery
+  const filteredRegions = useMemo(() => {
+    return activeDataset.filter(region => {
+      // Search
+      const q = searchQuery.toLowerCase().trim();
+      const matchesSearch = !q || 
+        region.name.toLowerCase().includes(q) || 
+        (region.county && region.county.toLowerCase().includes(q)) ||
+        (region.tract_fips && region.tract_fips.includes(q)) ||
+        region.members.some(m => m.id.toLowerCase().includes(q));
+
+      if (!matchesSearch) return false;
+
+      // Status Filter
       if (statusFilter === 'All') return true;
-      if (statusFilter === 'HighPriority') return c.status === 'Critical' || c.status === 'Elevated';
-      if (statusFilter === 'Moderate') return c.status === 'Moderate';
-      if (statusFilter === 'Stable') return c.status === 'Stable';
+      if (statusFilter === 'HighPriority') return region.status === 'Critical' || region.status === 'Elevated';
+      if (statusFilter === 'Moderate') return region.status === 'Moderate';
+      if (statusFilter === 'Stable') return region.status === 'Stable';
       return true;
     });
-  }, [counties, statusFilter]);
+  }, [activeDataset, statusFilter, searchQuery]);
 
-  // Marker styling
-  const getMarkerStyling = (county: CountyData) => {
-    if (county.status === 'Critical') {
-      return { fill: '#ba1a1a', stroke: '#93000a', radius: 10 + county.total_members * 0.8 };
-    }
-    if (county.status === 'Elevated') {
-      return { fill: '#e11d48', stroke: '#be123c', radius: 9 + county.total_members * 0.7 };
-    }
-    if (county.status === 'Moderate') {
-      return { fill: '#d97706', stroke: '#b45309', radius: 8 + county.total_members * 0.6 };
-    }
-    return { fill: '#0d9488', stroke: '#0f766e', radius: 7 + county.total_members * 0.5 };
-  };
+  // Marker styling based on Risk Perspective
+  const getMarkerStyling = (region: RegionData) => {
+    const isTract = region.type === 'tract';
+    const baseRadius = isTract ? 7 : (9 + region.total_members * 0.7);
 
-  const getRiskBadge = (level: string) => {
-    switch (level) {
-      case 'Critical':
-        return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-error/10 text-error border border-error/20">Critical</span>;
-      case 'High':
-      case 'Elevated':
-        return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200">High</span>;
-      case 'Moderate':
-        return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">Moderate</span>;
-      default:
-        return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-teal-100 text-teal-800 border border-teal-200">Low / Stable</span>;
+    if (riskPerspective === 'future5') {
+      if (region.status === 'Critical') {
+        return { fill: '#ba1a1a', stroke: '#93000a', radius: baseRadius + 3 };
+      }
+      if (region.status === 'Elevated') {
+        return { fill: '#e11d48', stroke: '#be123c', radius: baseRadius + 2 };
+      }
+      if (region.status === 'Moderate') {
+        return { fill: '#d97706', stroke: '#b45309', radius: baseRadius + 1 };
+      }
+      return { fill: '#0d9488', stroke: '#0f766e', radius: baseRadius };
+    } 
+    else if (riskPerspective === 'future3') {
+      const high3 = region.future_risk_3_breakdown.High || 0;
+      const mod3 = region.future_risk_3_breakdown.Moderate || 0;
+      if (high3 > 0) {
+        return { fill: '#ba1a1a', stroke: '#93000a', radius: baseRadius + 3 };
+      }
+      if (mod3 > 0) {
+        return { fill: '#d97706', stroke: '#b45309', radius: baseRadius + 1 };
+      }
+      return { fill: '#0d9488', stroke: '#0f766e', radius: baseRadius };
+    } 
+    else {
+      // SDOH Vulnerability
+      const pov = region.sdoh_averages.poverty || 0;
+      const house = region.sdoh_averages.housing_burden || 0;
+      if (pov >= 20 || house >= 30) {
+        return { fill: '#ba1a1a', stroke: '#93000a', radius: baseRadius + 3 };
+      }
+      if (pov >= 12 || house >= 20) {
+        return { fill: '#d97706', stroke: '#b45309', radius: baseRadius + 1 };
+      }
+      return { fill: '#0d9488', stroke: '#0f766e', radius: baseRadius };
     }
   };
 
@@ -178,7 +248,7 @@ const RiskMap: React.FC = () => {
       <div className="shrink-0 flex justify-between items-start">
         <div>
           <div className="flex items-center gap-3">
-            <h2 className="text-2xl font-bold text-on-surface mb-1">California Population Risk Map</h2>
+            <h2 className="text-2xl font-bold text-on-surface mb-1">Geographic Risk Analysis</h2>
             {!isLoading && totalMembers > 0 && (
               <span className="px-2.5 py-0.5 bg-primary/10 text-primary border border-primary/20 rounded-full text-[11px] font-bold">
                 {totalMembers} Members • {totalHighRisk} High/Critical Priority
@@ -186,11 +256,11 @@ const RiskMap: React.FC = () => {
             )}
           </div>
           <p className="text-[13px] text-on-surface-variant font-medium">
-            County-level aggregation of real patient clinical records, 5-class & 3-class future ML predictions, and California SDOH environment.
+            Real-time geospatial mapping across California Counties and Census Tracts combining 5-Class Future Risk, 3-Class CatBoost, and Census SDOH.
           </p>
         </div>
         <button 
-          onClick={fetchCountyData} 
+          onClick={fetchMapData} 
           disabled={isLoading}
           className="flex items-center gap-2 px-3.5 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-[12px] font-semibold rounded-lg shadow-sm transition-all disabled:opacity-50 cursor-pointer"
         >
@@ -199,17 +269,61 @@ const RiskMap: React.FC = () => {
         </button>
       </div>
 
-      {/* Control & Filter Bar */}
+      {/* Control & View Switcher Bar */}
       <div className="glass-card rounded-xl p-3.5 flex flex-wrap items-center gap-4 shrink-0 justify-between border border-slate-200/50">
-        <div className="flex items-center gap-2">
-          <ShieldAlert className="w-4 h-4 text-primary" />
-          <span className="text-[13px] font-bold text-slate-800">Population Risk Distribution</span>
-          <span className="text-[11px] text-slate-500 font-medium">({filteredCounties.length} counties visible)</span>
+        <div className="flex items-center gap-3">
+          {/* 1. View Mode Switcher: County vs Tract */}
+          <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
+            <button
+              onClick={() => setViewMode('county')}
+              className={`px-3 py-1 rounded-lg text-[12px] font-bold transition-all cursor-pointer ${
+                viewMode === 'county' ? 'bg-white text-primary shadow-xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              County Level ({counties.length})
+            </button>
+            <button
+              onClick={() => setViewMode('tract')}
+              className={`px-3 py-1 rounded-lg text-[12px] font-bold transition-all cursor-pointer ${
+                viewMode === 'tract' ? 'bg-white text-primary shadow-xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Census Tract Level ({tracts.length})
+            </button>
+          </div>
+
+          {/* 2. Risk Perspective Selector */}
+          <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
+            <button
+              onClick={() => setRiskPerspective('future5')}
+              className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                riskPerspective === 'future5' ? 'bg-primary text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Future Risk (5-Class)
+            </button>
+            <button
+              onClick={() => setRiskPerspective('future3')}
+              className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                riskPerspective === 'future3' ? 'bg-primary text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Future Risk (3-Class)
+            </button>
+            <button
+              onClick={() => setRiskPerspective('sdoh')}
+              className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                riskPerspective === 'sdoh' ? 'bg-primary text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              SDOH Environment
+            </button>
+          </div>
         </div>
 
-        {/* Filter Pills */}
+        {/* 3. Filter Pills */}
         <div className="flex items-center gap-1.5 text-[12px]">
-          <span className="text-[11px] font-bold text-slate-400 uppercase mr-1">Filter by Risk:</span>
+          <span className="text-[11px] font-bold text-slate-400 uppercase mr-1">Filter:</span>
           
           <button 
             onClick={() => setStatusFilter('All')}
@@ -226,7 +340,7 @@ const RiskMap: React.FC = () => {
               statusFilter === 'HighPriority' ? 'bg-rose-600 text-white font-bold' : 'bg-slate-50 text-rose-700 hover:bg-rose-50 border border-rose-200'
             }`}
           >
-            High/Critical Risk ({filterCounts.high})
+            High/Critical ({filterCounts.high})
           </button>
 
           <button 
@@ -244,8 +358,20 @@ const RiskMap: React.FC = () => {
               statusFilter === 'Stable' ? 'bg-teal-600 text-white font-bold' : 'bg-slate-50 text-teal-700 hover:bg-teal-50 border border-teal-200'
             }`}
           >
-            Low / Stable ({filterCounts.low})
+            Low/Stable ({filterCounts.low})
           </button>
+        </div>
+
+        {/* 4. Search Box */}
+        <div className="relative min-w-[210px]">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+          <input
+            type="text"
+            placeholder={`Search ${viewMode === 'county' ? 'county or patient ID...' : 'tract FIPS or patient...'}`}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-8 pr-3 py-1 text-xs border border-slate-200 rounded-lg w-full bg-white text-slate-700 focus:outline-none focus:border-primary outline-none"
+          />
         </div>
       </div>
 
@@ -256,24 +382,24 @@ const RiskMap: React.FC = () => {
             <AlertTriangle className="w-4 h-4 text-red-600" />
             <span>{error}</span>
           </div>
-          <button onClick={fetchCountyData} className="font-bold underline cursor-pointer">Retry</button>
+          <button onClick={fetchMapData} className="font-bold underline cursor-pointer">Retry</button>
         </div>
       )}
 
-      {/* Main Map + County Details Layout */}
+      {/* Main Map + Details Layout */}
       <div className="flex-1 flex flex-col lg:flex-row gap-6 min-h-[350px] overflow-hidden">
-        {/* Left/Center: Interactive Map Container */}
+        {/* Interactive Map */}
         <div className="flex-1 glass-card rounded-xl overflow-hidden relative border border-slate-200/50 min-h-[300px] lg:min-h-0 flex flex-col">
           {isLoading ? (
             <div className="w-full h-full flex flex-col items-center justify-center gap-3 bg-slate-50/50">
               <Loader2 className="w-8 h-8 text-primary animate-spin" />
-              <p className="text-[13px] font-medium text-slate-500">Aggregating county-level future risk from PostgreSQL...</p>
+              <p className="text-[13px] font-medium text-slate-500">Loading geospatial {viewMode === 'county' ? 'county' : 'census tract'} risk layers...</p>
             </div>
           ) : (
             <div className="relative w-full h-full">
               <MapContainer 
                 center={[36.7783, -119.4179]} 
-                zoom={6} 
+                zoom={viewMode === 'tract' ? 7 : 6} 
                 scrollWheelZoom={true}
                 className="w-full h-full"
               >
@@ -282,42 +408,47 @@ const RiskMap: React.FC = () => {
                   url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 />
 
-                {selectedCounty && (
-                  <MapRecenter lat={selectedCounty.lat} lng={selectedCounty.lng} />
+                {selectedRegion && (
+                  <MapRecenter lat={selectedRegion.lat} lng={selectedRegion.lng} zoom={viewMode === 'tract' ? 9 : 7} />
                 )}
 
-                {filteredCounties.map((county) => {
-                  const style = getMarkerStyling(county);
-                  const isSelected = selectedCounty?.name === county.name;
+                {filteredRegions.map((region) => {
+                  const style = getMarkerStyling(region);
+                  const isSelected = selectedRegion?.id === region.id;
 
                   return (
                     <CircleMarker
-                      key={county.name}
-                      center={[county.lat, county.lng]}
+                      key={region.id}
+                      center={[region.lat, region.lng]}
                       radius={isSelected ? style.radius + 3 : style.radius}
                       fillColor={style.fill}
                       color={isSelected ? '#0f172a' : style.stroke}
-                      weight={isSelected ? 3 : 1.5}
-                      fillOpacity={isSelected ? 0.85 : 0.65}
+                      weight={isSelected ? 3 : (region.type === 'tract' ? 1.5 : 2)}
+                      fillOpacity={isSelected ? 0.9 : 0.7}
                       eventHandlers={{
                         click: () => {
-                          setSelectedCounty(county);
+                          setSelectedRegion(region);
                           setSelectedMemberTab('overview');
                         }
                       }}
                     >
                       <Tooltip direction="top" offset={[0, -10]} opacity={1}>
-                        <div className="font-bold text-[12px] text-slate-900">{county.name}</div>
-                        <div className="text-[11px] text-slate-600 font-medium">
-                          {county.total_members} Active Member{county.total_members === 1 ? '' : 's'}
+                        <div className="font-bold text-[12px] text-slate-900">
+                          {region.name} {region.county && region.type === 'tract' ? `(${region.county})` : ''}
                         </div>
-                        {county.high_risk_members > 0 && (
-                          <div className="text-[10px] text-rose-600 font-bold">
-                            ⚠️ {county.high_risk_members} High / Critical Risk
+                        <div className="text-[11px] text-slate-600 font-medium mt-0.5">
+                          {region.total_members} Active Member{region.total_members === 1 ? '' : 's'}
+                        </div>
+                        <div className="text-[10px] text-slate-700 font-semibold mt-0.5">
+                          Future 5-Class: <span className="font-bold text-rose-600">{region.status}</span>
+                        </div>
+                        {region.primary_driver && (
+                          <div className="text-[10px] text-slate-500 truncate max-w-[200px]">
+                            Driver: {region.primary_driver}
                           </div>
                         )}
                         <div className="text-[10px] text-slate-500 mt-0.5">
-                          Avg Poverty: {county.sdoh_averages.poverty}% • Housing: {county.sdoh_averages.housing_burden}%
+                          Poverty: {region.sdoh_averages.poverty}% • Housing: {region.sdoh_averages.housing_burden}%
                         </div>
                       </Tooltip>
                     </CircleMarker>
@@ -329,16 +460,18 @@ const RiskMap: React.FC = () => {
               <div className="absolute bottom-4 left-4 z-[1000] bg-white/95 backdrop-blur-md p-3 rounded-xl border border-slate-200/80 shadow-lg text-[11px] space-y-1.5">
                 <p className="font-bold text-slate-700 uppercase tracking-wider text-[10px] border-b border-slate-100 pb-1 flex items-center gap-1">
                   <Sparkles className="w-3 h-3 text-primary" />
-                  <span>County Risk Legend</span>
+                  <span>
+                    {riskPerspective === 'future5' ? '5-Class Future Risk' : (riskPerspective === 'future3' ? '3-Class Future Risk' : 'SDOH Hardship Level')}
+                  </span>
                 </p>
 
                 <div className="flex items-center gap-2">
                   <span className="w-2.5 h-2.5 rounded-full bg-[#ba1a1a]"></span>
-                  <span className="text-slate-600 font-semibold">Critical Priority</span>
+                  <span className="text-slate-600 font-semibold">Critical / High Risk</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="w-2.5 h-2.5 rounded-full bg-[#e11d48]"></span>
-                  <span className="text-slate-600 font-semibold">Elevated High Risk</span>
+                  <span className="text-slate-600 font-semibold">Elevated Risk</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="w-2.5 h-2.5 rounded-full bg-[#d97706]"></span>
@@ -353,9 +486,9 @@ const RiskMap: React.FC = () => {
           )}
         </div>
 
-        {/* Right Detail Panel: County Intelligence & Member Cohort Drill-Down */}
+        {/* Right Detail Panel: Region / Tract Intelligence */}
         <div className="w-full lg:w-[430px] glass-card rounded-xl flex flex-col overflow-hidden border border-slate-200/50 shrink-0 h-full bg-white">
-          {selectedCounty ? (
+          {selectedRegion ? (
             <>
               {/* Header */}
               <div className="p-5 border-b border-slate-200 bg-slate-50/70 shrink-0">
@@ -363,19 +496,20 @@ const RiskMap: React.FC = () => {
                   <div>
                     <div className="flex items-center gap-2">
                       <MapPin className="w-4 h-4 text-primary shrink-0" />
-                      <h3 className="text-lg font-bold text-on-surface leading-tight">{selectedCounty.name}</h3>
+                      <h3 className="text-lg font-bold text-on-surface leading-tight">{selectedRegion.name}</h3>
                     </div>
                     <span className="text-[11px] font-bold text-slate-500 ml-6">
-                      {selectedCounty.total_members} Active Patient{selectedCounty.total_members === 1 ? '' : 's'} • {selectedCounty.high_risk_members} High/Critical
+                      {selectedRegion.county ? `${selectedRegion.county} • ` : ''}
+                      {selectedRegion.total_members} Active Patient{selectedRegion.total_members === 1 ? '' : 's'} • {selectedRegion.high_risk_members} High/Critical
                     </span>
                   </div>
-                  <div className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold flex items-center gap-1 border ${selectedCounty.statusColor}`}>
+                  <div className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold flex items-center gap-1 border ${selectedRegion.statusColor}`}>
                     <AlertTriangle className="w-3 h-3" />
-                    <span>{selectedCounty.status}</span>
+                    <span>{selectedRegion.status}</span>
                   </div>
                 </div>
 
-                {/* Tab switcher: County Overview vs Member Drill-Down */}
+                {/* Tab Switcher */}
                 <div className="flex gap-2 mt-3 pt-2 border-t border-slate-200/60">
                   <button 
                     onClick={() => setSelectedMemberTab('overview')}
@@ -383,7 +517,7 @@ const RiskMap: React.FC = () => {
                       selectedMemberTab === 'overview' ? 'bg-primary text-white shadow-sm' : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
                     }`}
                   >
-                    County Analytics
+                    {selectedRegion.type === 'tract' ? 'Tract Analytics' : 'County Analytics'}
                   </button>
                   <button 
                     onClick={() => setSelectedMemberTab('members')}
@@ -392,7 +526,7 @@ const RiskMap: React.FC = () => {
                     }`}
                   >
                     <Users className="w-3.5 h-3.5" />
-                    <span>Members ({selectedCounty.members.length})</span>
+                    <span>Members ({selectedRegion.members.length})</span>
                   </button>
                 </div>
               </div>
@@ -401,15 +535,15 @@ const RiskMap: React.FC = () => {
               <div className="p-5 flex-1 overflow-y-auto space-y-5 bg-white custom-scrollbar">
                 {selectedMemberTab === 'overview' ? (
                   <>
-                    {/* 5-Class Current Risk Distribution */}
+                    {/* 5-Class Future Risk Breakdown */}
                     <div className="bg-slate-50/60 p-4 rounded-xl border border-slate-100">
                       <h4 className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-2.5 flex justify-between items-center">
-                        <span>Current Risk Distribution (5 Classes)</span>
-                        <span className="text-[10px] text-slate-400 font-mono">{selectedCounty.total_members} total</span>
+                        <span>Future Risk Distribution (5 Classes)</span>
+                        <span className="text-[10px] text-slate-400 font-mono">{selectedRegion.total_members} total</span>
                       </h4>
                       <div className="space-y-2">
-                        {Object.entries(selectedCounty.future_risk_5_breakdown).map(([cls, count]) => {
-                          const pct = selectedCounty.total_members > 0 ? (count / selectedCounty.total_members * 100).toFixed(0) : 0;
+                        {Object.entries(selectedRegion.future_risk_5_breakdown).map(([cls, count]) => {
+                          const pct = selectedRegion.total_members > 0 ? (count / selectedRegion.total_members * 100).toFixed(0) : 0;
                           return (
                             <div key={cls} className="flex flex-col gap-1">
                               <div className="flex justify-between text-[11px] font-semibold">
@@ -442,61 +576,66 @@ const RiskMap: React.FC = () => {
                       </h4>
                       <div className="grid grid-cols-3 gap-2 text-center">
                         <div className="p-2 bg-white rounded-lg border border-slate-200/60">
-                          <span className="block text-lg font-bold text-rose-600">{selectedCounty.future_risk_3_breakdown.High || 0}</span>
+                          <span className="block text-lg font-bold text-rose-600">{selectedRegion.future_risk_3_breakdown.High || 0}</span>
                           <span className="text-[10px] font-bold text-slate-500 uppercase">High</span>
                         </div>
                         <div className="p-2 bg-white rounded-lg border border-slate-200/60">
-                          <span className="block text-lg font-bold text-amber-600">{selectedCounty.future_risk_3_breakdown.Moderate || 0}</span>
+                          <span className="block text-lg font-bold text-amber-600">{selectedRegion.future_risk_3_breakdown.Moderate || 0}</span>
                           <span className="text-[10px] font-bold text-slate-500 uppercase">Moderate</span>
                         </div>
                         <div className="p-2 bg-white rounded-lg border border-slate-200/60">
-                          <span className="block text-lg font-bold text-teal-600">{selectedCounty.future_risk_3_breakdown.Low || 0}</span>
+                          <span className="block text-lg font-bold text-teal-600">{selectedRegion.future_risk_3_breakdown.Low || 0}</span>
                           <span className="text-[10px] font-bold text-slate-500 uppercase">Low</span>
                         </div>
                       </div>
                     </div>
 
-                    {/* Community SDOH Indicators */}
-                    <div>
+                    {/* SDOH Environment Grid */}
+                    <div className="bg-slate-50/60 p-4 rounded-xl border border-slate-100">
                       <h4 className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-2.5">
-                        Census Tract SDOH Environment (County Averages)
+                        {selectedRegion.type === 'tract' ? 'Census Tract SDOH Environment' : 'County SDOH Environmental Profile'}
                       </h4>
-                      <div className="grid grid-cols-2 gap-2 text-[12px]">
-                        <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-100 flex justify-between">
-                          <span className="text-slate-500 font-medium">Avg Poverty:</span>
-                          <span className="font-bold text-slate-800">{selectedCounty.sdoh_averages.poverty}%</span>
+                      <div className="grid grid-cols-2 gap-2.5">
+                        <div className="p-2.5 bg-white rounded-lg border border-slate-200/60">
+                          <span className="text-[10px] text-slate-400 font-bold uppercase block">Poverty Rate</span>
+                          <span className={`text-base font-extrabold ${selectedRegion.sdoh_averages.poverty >= 20 ? 'text-error' : 'text-slate-800'}`}>
+                            {selectedRegion.sdoh_averages.poverty}%
+                          </span>
                         </div>
-                        <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-100 flex justify-between">
-                          <span className="text-slate-500 font-medium">Housing Burden:</span>
-                          <span className="font-bold text-slate-800">{selectedCounty.sdoh_averages.housing_burden}%</span>
+                        <div className="p-2.5 bg-white rounded-lg border border-slate-200/60">
+                          <span className="text-[10px] text-slate-400 font-bold uppercase block">Housing Burden</span>
+                          <span className={`text-base font-extrabold ${selectedRegion.sdoh_averages.housing_burden >= 30 ? 'text-error' : 'text-slate-800'}`}>
+                            {selectedRegion.sdoh_averages.housing_burden}%
+                          </span>
                         </div>
-                        <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-100 flex justify-between">
-                          <span className="text-slate-500 font-medium">Unemployment:</span>
-                          <span className="font-bold text-slate-800">{selectedCounty.sdoh_averages.unemployment}%</span>
+                        <div className="p-2.5 bg-white rounded-lg border border-slate-200/60">
+                          <span className="text-[10px] text-slate-400 font-bold uppercase block">Unemployment</span>
+                          <span className="text-base font-extrabold text-slate-800">
+                            {selectedRegion.sdoh_averages.unemployment}%
+                          </span>
                         </div>
-                        <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-100 flex justify-between">
-                          <span className="text-slate-500 font-medium">Uninsured Pop:</span>
-                          <span className="font-bold text-slate-800">{selectedCounty.sdoh_averages.uninsured}%</span>
+                        <div className="p-2.5 bg-white rounded-lg border border-slate-200/60">
+                          <span className="text-[10px] text-slate-400 font-bold uppercase block">Uninsured Rate</span>
+                          <span className="text-base font-extrabold text-slate-800">
+                            {selectedRegion.sdoh_averages.uninsured}%
+                          </span>
                         </div>
                       </div>
                     </div>
 
-                    {/* Top Drivers in Selected County */}
-                    {selectedCounty.drivers.length > 0 && (
-                      <div>
+                    {/* Dominant TreeSHAP Feature Drivers */}
+                    {selectedRegion.drivers && selectedRegion.drivers.length > 0 && (
+                      <div className="bg-slate-50/60 p-4 rounded-xl border border-slate-100">
                         <h4 className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-2.5">
-                          Dominant Risk Drivers in {selectedCounty.name}
+                          Top Risk Drivers (TreeSHAP)
                         </h4>
-                        <div className="space-y-2.5">
-                          {selectedCounty.drivers.map((drv, i) => (
-                            <div key={i} className="bg-slate-50 p-2.5 rounded-lg border border-slate-100">
-                              <div className="flex justify-between text-[12px] font-semibold text-slate-800 mb-1">
-                                <span>{drv.name}</span>
-                                <span className="font-bold text-primary">{drv.percentage}% of cohort</span>
-                              </div>
-                              <div className="h-1.5 w-full bg-slate-200 rounded-full overflow-hidden">
-                                <div className={`h-full ${drv.color}`} style={{ width: `${drv.percentage}%` }}></div>
-                              </div>
+                        <div className="space-y-2">
+                          {selectedRegion.drivers.map((d, idx) => (
+                            <div key={idx} className="flex justify-between items-center p-2 bg-white rounded-lg border border-slate-100 text-[12px]">
+                              <span className="font-semibold text-slate-800 truncate max-w-[240px]">{d.name}</span>
+                              <span className="text-[11px] font-bold text-primary px-2 py-0.5 rounded-md bg-primary/5 border border-primary/10">
+                                {d.percentage}%
+                              </span>
                             </div>
                           ))}
                         </div>
@@ -504,31 +643,41 @@ const RiskMap: React.FC = () => {
                     )}
                   </>
                 ) : (
-                  /* Member Drill-Down List */
+                  /* Members Tab */
                   <div className="space-y-3">
-                    <div className="flex justify-between items-center mb-1">
-                      <span className="text-[11px] font-bold text-slate-500 uppercase">
-                        Patients Residing in {selectedCounty.name}
-                      </span>
-                      <span className="text-[11px] font-bold text-primary">{selectedCounty.members.length} members</span>
-                    </div>
-
-                    {selectedCounty.members.map((mem) => (
+                    <h4 className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-2">
+                      Enrolled Patients ({selectedRegion.members.length})
+                    </h4>
+                    {selectedRegion.members.map((member) => (
                       <div 
-                        key={mem.id}
-                        onClick={() => navigate(`/members?id=${mem.id}`)}
-                        className="p-3 bg-slate-50/70 hover:bg-slate-100/80 rounded-xl border border-slate-200/70 transition-all cursor-pointer group"
+                        key={member.id}
+                        className="p-3.5 bg-slate-50/70 hover:bg-slate-100/70 transition-all rounded-xl border border-slate-200/60 flex flex-col gap-2"
                       >
-                        <div className="flex justify-between items-start mb-1">
-                          <span className="font-bold text-[13px] text-primary group-hover:underline flex items-center gap-1">
-                            {mem.id}
-                            <ExternalLink className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+                        <div className="flex justify-between items-center">
+                          <span className="font-bold text-primary text-[13px]">{member.id}</span>
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            member.future_risk_5 === 'Critical' ? 'bg-error/10 text-error border border-error/20' :
+                            member.future_risk_5 === 'High' ? 'bg-rose-100 text-rose-800 border border-rose-200' :
+                            member.future_risk_5 === 'Moderate' ? 'bg-amber-100 text-amber-800 border border-amber-200' :
+                            'bg-teal-100 text-teal-800 border border-teal-200'
+                          }`}>
+                            {member.future_risk_5} (5-Class)
                           </span>
-                          {getRiskBadge(mem.future_risk_5)}
                         </div>
-                        <div className="text-[11px] text-slate-500 flex justify-between items-center mt-1">
-                          <span>Tract: {mem.tract_fips}</span>
-                          <span className="font-semibold text-slate-700">{mem.driver}</span>
+
+                        <div className="text-[11px] text-slate-600 font-medium">
+                          <span className="font-semibold text-slate-800">Primary Driver:</span> {member.driver}
+                        </div>
+
+                        <div className="flex justify-between items-center pt-1 border-t border-slate-200/40 text-[11px] text-slate-500">
+                          <span>ED: {member.ed_visits} • IP: {member.ip_visits} • Enc: {member.encounters}</span>
+                          <button
+                            onClick={() => navigate('/members')}
+                            className="text-primary hover:underline font-bold flex items-center gap-1 cursor-pointer"
+                          >
+                            <span>Analyze</span>
+                            <ArrowRight className="w-3 h-3" />
+                          </button>
                         </div>
                       </div>
                     ))}
@@ -536,11 +685,11 @@ const RiskMap: React.FC = () => {
                 )}
               </div>
 
-              {/* Action footer */}
-              <div className="p-4 border-t border-slate-200 bg-slate-50/50 shrink-0">
-                <button 
+              {/* Footer */}
+              <div className="p-4 border-t border-slate-200 bg-slate-50/50 shrink-0 flex gap-2">
+                <button
                   onClick={() => navigate('/members')}
-                  className="w-full py-2.5 bg-primary text-white rounded-xl font-bold text-[13px] hover:bg-primary/95 transition-colors flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+                  className="w-full py-2.5 bg-primary text-white text-[12px] font-bold rounded-lg hover:bg-primary-hover transition-colors shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
                 >
                   <span>View All California Members</span>
                   <ArrowRight className="w-4 h-4" />
@@ -549,8 +698,8 @@ const RiskMap: React.FC = () => {
             </>
           ) : (
             <div className="p-8 text-center text-slate-400 flex flex-col items-center justify-center h-full">
-              <MapPin className="w-10 h-10 mb-2 opacity-30" />
-              <p className="text-sm font-semibold">Select a county on the map to inspect risk distribution and patient cohort</p>
+              <MapPin className="w-8 h-8 text-slate-300 mb-2" />
+              <p className="text-sm font-semibold">Select a {viewMode === 'county' ? 'county' : 'census tract'} on the map</p>
             </div>
           )}
         </div>
