@@ -5,6 +5,7 @@ import {
   Users, 
   Activity, 
   Map, 
+  BarChart3,
   CheckSquare, 
   Settings, 
   HelpCircle,
@@ -16,7 +17,8 @@ const Sidebar: React.FC = () => {
     { path: '/', label: 'Overview', icon: LayoutDashboard },
     { path: '/members', label: 'Members', icon: Users },
     { path: '/clinical', label: 'Clinical Risk', icon: Activity },
-    { path: '/map', label: 'SDOH Risk Map', icon: Map },
+    { path: '/map', label: 'Risk Map', icon: Map },
+    { path: '/sdoh-analysis', label: 'SDOH Analysis', icon: BarChart3 },
     { path: '/interventions', label: 'Priority & Interventions', icon: CheckSquare },
   ];
 

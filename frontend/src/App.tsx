@@ -5,6 +5,7 @@ import Overview from './pages/Overview';
 import Members from './pages/Members';
 import ClinicalRisk from './pages/ClinicalRisk';
 import RiskMap from './pages/RiskMap';
+import SDOHAnalysis from './pages/SDOHAnalysis';
 import Interventions from './pages/Interventions';
 
 function App() {
@@ -69,6 +70,20 @@ function App() {
                   />
                   <main className="p-4 md:p-8 flex flex-col gap-8 w-full flex-1">
                     <RiskMap />
+                  </main>
+                </>
+              } 
+            />
+            <Route 
+              path="/sdoh-analysis" 
+              element={
+                <>
+                  <Header 
+                    title="Community SDOH Analytics & Intelligence" 
+                    subtitle="Enterprise Power BI reporting and California Census Tract social determinants of health" 
+                  />
+                  <main className="p-4 md:p-8 flex flex-col gap-8 w-full flex-1">
+                    <SDOHAnalysis />
                   </main>
                 </>
               } 
