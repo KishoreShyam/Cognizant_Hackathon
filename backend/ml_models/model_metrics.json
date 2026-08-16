@@ -1,0 +1,22 @@
+{
+    "model": "CatBoost",
+    "target": "FUTURE_TARGET",
+    "train_samples": 9800,
+    "validation_samples": 2100,
+    "test_samples": 2100,
+    "number_of_features": 63,
+    "categorical_features": 3,
+    "accuracy": 0.8909523809523809,
+    "precision": 0.8927879012153849,
+    "recall": 0.8909523809523809,
+    "f1": 0.8914230257135746,
+    "roc_auc": 0.9743139372148861,
+    "shap": true,
+    "shap_usage": "POST_PREDICTION_EXPLAINABILITY",
+    "future_columns_excluded": [
+        "FUTURE_TARGET"
+    ],
+    "id_columns_excluded": [
+        "PATIENT_ID"
+    ]
+}
