@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Search, Calendar, Bell, ChevronDown } from 'lucide-react';
 
 interface HeaderProps {
@@ -10,6 +10,15 @@ const Header: React.FC<HeaderProps> = ({
   title = "Population Health Portal", 
   subtitle = "Real-time risk intelligence for better member outcomes" 
 }) => {
+  // Dynamically compute the real-time date window
+  const currentDateFormatted = useMemo(() => {
+    const now = new Date();
+    const past7Days = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
+    const startStr = past7Days.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const endStr = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    return `${startStr} – ${endStr}`;
+  }, []);
+
   return (
     <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between px-8 py-4 sm:py-0 w-full h-auto sm:h-24 sticky top-0 z-40 bg-[#f0f4f8]/80 backdrop-blur-md border-b border-white/20 shrink-0 gap-4 sm:gap-0">
       {/* Title & Info */}
@@ -34,12 +43,12 @@ const Header: React.FC<HeaderProps> = ({
           />
         </div>
 
-        {/* Date Selector */}
-        <button className="flex items-center gap-2 bg-white/60 backdrop-blur-md border border-white/80 rounded-full py-2 px-4 text-[13px] font-semibold text-on-surface shadow-sm hover:bg-white transition-all shrink-0">
+        {/* Real-Time Date Indicator */}
+        <div className="flex items-center gap-2 bg-white/60 backdrop-blur-md border border-white/80 rounded-full py-2 px-4 text-[13px] font-semibold text-on-surface shadow-sm hover:bg-white transition-all shrink-0 cursor-pointer">
           <Calendar className="text-primary w-4 h-4" />
-          <span>May 10 – May 16, 2025</span>
+          <span>{currentDateFormatted}</span>
           <ChevronDown className="text-on-surface-variant w-4 h-4" />
-        </button>
+        </div>
 
         {/* Notifications */}
         <button className="w-10 h-10 flex items-center justify-center bg-white/60 backdrop-blur-md border border-white/80 text-on-surface-variant hover:text-primary rounded-full hover:bg-white transition-all relative shadow-sm shrink-0">
