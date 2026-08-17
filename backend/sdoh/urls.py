@@ -6,6 +6,7 @@ from .views import (
     BatchPredictAllView,
     ModelInfoView,
     CountyRiskMapView,
+    CountyDetailRiskView,
     OverviewView,
     InterventionsView,
 )
@@ -16,9 +17,12 @@ urlpatterns = [
     path('members/', PatientListView.as_view(), name='members-list'),
     path('patients/', PatientListView.as_view(), name='patient-list'),
     path('map/counties/', CountyRiskMapView.as_view(), name='map-counties'),
+    path('map/counties/<str:county_id>/', CountyDetailRiskView.as_view(), name='map-county-detail'),
+    path('geographic-risk/county/<str:county_id>/', CountyDetailRiskView.as_view(), name='geographic-risk-county'),
     path('patients/predict-all/', BatchPredictAllView.as_view(), name='batch-predict-all'),
     path('patients/<str:patient_id>/', PatientDetailView.as_view(), name='patient-detail'),
     path('patients/<str:patient_id>/predict/', PatientPredictView.as_view(), name='patient-predict'),
     path('model-info/', ModelInfoView.as_view(), name='model-info'),
 ]
+
 

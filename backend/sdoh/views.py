@@ -3,9 +3,18 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
 from collections import defaultdict
+import time
 from .models import Patient, CommunitySDOH, PatientRiskPrediction
 from .ml_engine import get_prediction_engine, prediction_to_dict
 from .services import is_prediction_stale, get_or_predict_patient_risk
+
+# ---------------------------------------------------------------------------
+# In-memory response cache for the expensive CountyRiskMapView endpoint.
+# Keyed by view name; value is (timestamp, response_data).
+# Cache TTL: 5 minutes (300 seconds). Invalidated when Refresh Map is clicked.
+# ---------------------------------------------------------------------------
+_MAP_CACHE: dict = {}
+_MAP_CACHE_TTL: int = 300  # seconds
 
 
 class PatientPredictView(APIView):
@@ -356,14 +365,235 @@ CALIFORNIA_COUNTY_COORDS = {
 }
 
 
+def compute_shap_from_stored_predictions(patient_ids: list, pred_map: dict) -> tuple:
+    """
+    Aggregates population-level SHAP feature attributions from already-stored
+    PatientRiskPrediction.shap_drivers records — no CatBoost inference needed.
+
+    Each stored shap_drivers entry has the per-patient top-5 list:
+      [{'feature': str, 'display_name': str, 'shap_value': float,
+        'shap_formatted': str, 'raw_value': any, 'category': str}, ...]
+
+    We accumulate SHAP values per feature across all patients, then compute
+    mean_abs_shap and mean_shap for ranking, mimicking compute_population_tree_shap.
+    """
+    from .ml_engine import FEATURE_DISPLAY_NAMES, CLINICAL_FEATURES
+
+    if not patient_ids:
+        return [], []
+
+    total_n = len(patient_ids)
+    # feature -> {'shap_sum': float, 'abs_shap_sum': float, 'count': int,
+    #             'display_name': str, 'category': str, 'raw_vals': list}
+    feat_accum: dict = {}
+
+    for pid in patient_ids:
+        pred = pred_map.get(pid)
+        drivers = (pred.shap_drivers or []) if pred else []
+        for d in drivers:
+            feat = d.get('feature')
+            if not feat:
+                continue
+            sv = float(d.get('shap_value', 0.0))
+            rv = d.get('raw_value', 0)
+            if feat not in feat_accum:
+                feat_accum[feat] = {
+                    'shap_sum': 0.0,
+                    'abs_shap_sum': 0.0,
+                    'count': 0,
+                    'pos_count': 0,
+                    'display_name': d.get('display_name', FEATURE_DISPLAY_NAMES.get(feat, feat.replace('_', ' ').title())),
+                    'category': d.get('category', 'Clinical' if feat in CLINICAL_FEATURES else 'SDOH'),
+                    'raw_vals': [],
+                }
+            feat_accum[feat]['shap_sum'] += sv
+            feat_accum[feat]['abs_shap_sum'] += abs(sv)
+            feat_accum[feat]['count'] += 1
+            if sv > 0.0001:
+                feat_accum[feat]['pos_count'] += 1
+            try:
+                feat_accum[feat]['raw_vals'].append(float(rv))
+            except (TypeError, ValueError):
+                pass
+
+    sdoh_drivers = []
+    clinical_drivers = []
+
+    for feat, acc in feat_accum.items():
+        mean_abs = acc['abs_shap_sum'] / total_n
+        mean_s = acc['shap_sum'] / total_n
+        affected_cnt = acc['pos_count'] or (acc['count'] if mean_abs > 0.01 else 0)
+        affected_pct = round(affected_cnt / total_n * 100, 1) if total_n > 0 else 0.0
+
+        raw_vals = acc['raw_vals']
+        avg_val_raw = sum(raw_vals) / len(raw_vals) if raw_vals else 0.0
+        feat_lower = feat.lower()
+        if 'income' in feat_lower:
+            avg_val_str = f"${int(round(avg_val_raw)):,}"
+        elif any(k in feat_lower for k in [
+            'poverty', 'housing', 'unemploy', 'uninsur', 'disab',
+            'broadband', 'education', 'rate', 'pct', 'food_access'
+        ]):
+            avg_val_str = f"{avg_val_raw:.1f}%"
+        elif 'growth' in feat_lower or 'change' in feat_lower:
+            avg_val_str = f"{avg_val_raw:+.1f}"
+        else:
+            avg_val_str = str(int(round(avg_val_raw))) if abs(avg_val_raw - round(avg_val_raw)) < 0.05 else f"{avg_val_raw:.1f}"
+
+        item = {
+            'feature': feat,
+            'display_name': acc['display_name'],
+            'mean_abs_shap': round(mean_abs, 4),
+            'mean_shap': round(mean_s, 4),
+            'shap_formatted': f"{mean_s:+.3f}" if abs(mean_s) >= 0.001 else f"{mean_s:+.4f}",
+            'affected_members': affected_cnt,
+            'total_members': total_n,
+            'affected_percentage': affected_pct,
+            'affected_display': f"{affected_cnt} / {total_n} ({int(round(affected_pct))}%)",
+            'average_value': avg_val_str,
+            'average_value_raw': round(avg_val_raw, 2),
+            'category': acc['category'],
+        }
+        if acc['category'] == 'Clinical':
+            clinical_drivers.append(item)
+        elif feat not in ('SNAPSHOT_DATE', 'COUNTY', 'STATE'):
+            sdoh_drivers.append(item)
+
+    sdoh_drivers.sort(key=lambda x: -x['mean_abs_shap'])
+    clinical_drivers.sort(key=lambda x: -x['mean_abs_shap'])
+    return sdoh_drivers, clinical_drivers
+
+
+def compute_population_tree_shap(patients_list, engine):
+    """
+    Aggregates population-level TreeSHAP feature attributions across members in a geographic region (county or tract).
+    Calculates:
+      - mean_abs_shap: mean(|SHAP|) used for ranking importance
+      - mean_shap: mean(SHAP) preserving direction (+/- risk contribution)
+      - affected_members: count and percentage of members affected by the feature
+      - average_value: clean human-formatted feature average
+    """
+    if not patients_list:
+        return [], []
+
+    import numpy as np
+    import pandas as pd
+    import catboost
+    from .ml_engine import FEATURE_DISPLAY_NAMES, CLINICAL_FEATURES
+
+    # Assemble features for all patients in cohort
+    df_list = []
+    preds_classes = []
+    for p in patients_list:
+        df_row, _ = engine.assemble_features(p)
+        df_list.append(df_row)
+        latest = p.latest_prediction
+        if latest and latest.future_risk_class is not None:
+            preds_classes.append(latest.future_risk_class)
+        else:
+            res = engine.predict_patient(p, save_to_db=False)
+            preds_classes.append(res['future_risk_3']['class'])
+
+    df_cohort = pd.concat(df_list, ignore_index=True)
+    pool = catboost.Pool(df_cohort, cat_features=['SNAPSHOT_DATE', 'COUNTY', 'STATE'])
+    
+    # Calculate exact TreeSHAP matrix (N, 3, 64)
+    shaps_raw = engine.model_3_class.get_feature_importance(data=pool, type='ShapValues')
+    
+    # Extract predicted class SHAP for each patient
+    patient_shaps = np.array([shaps_raw[i, preds_classes[i], :-1] for i in range(len(patients_list))])
+    feat_names = engine.feature_names
+    total_n = len(patients_list)
+
+    sdoh_drivers = []
+    clinical_drivers = []
+
+    for idx, feat in enumerate(feat_names):
+        vals = df_cohort[feat].values
+        s_vals = patient_shaps[:, idx]
+        is_clin = feat in CLINICAL_FEATURES
+        
+        mean_abs = float(np.mean(np.abs(s_vals)))
+        mean_s = float(np.mean(s_vals))
+        
+        # Affected count: members with positive risk contribution or notable absolute contribution
+        pos_shap_count = int(np.sum(s_vals > 0.0001))
+        if pos_shap_count > 0:
+            affected_cnt = pos_shap_count
+        else:
+            affected_cnt = int(np.sum(np.abs(s_vals) > 0.005))
+
+        # Bound affected count between 1 and total_n if mean_abs is non-trivial
+        if affected_cnt == 0 and mean_abs > 0.01:
+            affected_cnt = max(1, int(round(total_n * 0.5)))
+        elif affected_cnt == 0:
+            affected_cnt = 0
+
+        affected_pct = round(affected_cnt / total_n * 100, 1) if total_n > 0 else 0.0
+
+        numeric_series = pd.to_numeric(pd.Series(vals), errors='coerce')
+        avg_val_raw = float(numeric_series.mean()) if not numeric_series.isna().all() else 0.0
+
+        display_name = FEATURE_DISPLAY_NAMES.get(feat, feat.replace('_', ' ').title())
+        feat_lower = feat.lower()
+
+        # Format average value nicely for presentation
+        if 'income' in feat_lower:
+            avg_val_str = f"${int(round(avg_val_raw)):,}"
+        elif 'poverty' in feat_lower or 'housing' in feat_lower or 'unemploy' in feat_lower or 'uninsur' in feat_lower or 'disab' in feat_lower or 'broadband' in feat_lower or 'education' in feat_lower or 'rate' in feat_lower or 'pct' in feat_lower or 'food_access' in feat_lower:
+            avg_val_str = f"{avg_val_raw:.1f}%"
+        elif 'growth' in feat_lower or 'change' in feat_lower:
+            avg_val_str = f"{avg_val_raw:+.1f}"
+        else:
+            if avg_val_raw.is_integer() or abs(avg_val_raw - round(avg_val_raw)) < 0.05:
+                avg_val_str = str(int(round(avg_val_raw)))
+            else:
+                avg_val_str = f"{avg_val_raw:.1f}"
+
+        item = {
+            'feature': feat,
+            'display_name': display_name,
+            'mean_abs_shap': round(mean_abs, 4),
+            'mean_shap': round(mean_s, 4),
+            'shap_formatted': f"{mean_s:+.3f}" if abs(mean_s) >= 0.001 else f"{mean_s:+.4f}",
+            'affected_members': affected_cnt,
+            'total_members': total_n,
+            'affected_percentage': affected_pct,
+            'affected_display': f"{affected_cnt} / {total_n} ({int(round(affected_pct))}%)",
+            'average_value': avg_val_str,
+            'average_value_raw': round(avg_val_raw, 2),
+            'category': 'Clinical' if is_clin else 'SDOH'
+        }
+
+        if is_clin:
+            clinical_drivers.append(item)
+        elif feat not in ['SNAPSHOT_DATE', 'COUNTY', 'STATE']:
+            sdoh_drivers.append(item)
+
+    sdoh_drivers.sort(key=lambda x: -x['mean_abs_shap'])
+    clinical_drivers.sort(key=lambda x: -x['mean_abs_shap'])
+
+    return sdoh_drivers, clinical_drivers
+
+
 class CountyRiskMapView(APIView):
     """
     GET /api/map/counties/
     
-    Aggregates real member records, 5-class & 3-class future risk predictions, TreeSHAP drivers, and Community SDOH
-    at the County level for the California Population Risk Map.
+    Aggregates real member records, 5-class & 3-class future risk predictions, population TreeSHAP drivers,
+    and Community SDOH at the County and Census Tract levels for the California Geographic Risk Analysis Map.
     """
     def get(self, request):
+        # ── Cache check ──────────────────────────────────────────────────────
+        force_refresh = request.query_params.get('refresh') == '1'
+        cache_key = 'county_risk_map'
+        now = time.time()
+        if not force_refresh and cache_key in _MAP_CACHE:
+            cached_ts, cached_data = _MAP_CACHE[cache_key]
+            if now - cached_ts < _MAP_CACHE_TTL:
+                return Response(cached_data, status=status.HTTP_200_OK)
+        # ────────────────────────────────────────────────────────────────────
+
         engine = get_prediction_engine()
         patients = list(Patient.objects.all().order_by('patient_id'))
         
@@ -397,6 +627,9 @@ class CountyRiskMapView(APIView):
         county_list = []
         total_high_priority_all = 0
 
+        # Score weights for 5-class average calculation (1.0 = Very Low, 5.0 = Critical)
+        risk_weights_5 = {'Very Low': 1.0, 'Low': 2.0, 'Moderate': 3.0, 'High': 4.0, 'Critical': 5.0}
+
         for county_name, items in county_groups.items():
             total_members = len(items)
             counts_5_class = {'Critical': 0, 'High': 0, 'Moderate': 0, 'Low': 0, 'Very Low': 0}
@@ -407,9 +640,13 @@ class CountyRiskMapView(APIView):
             unemployment_vals = []
             uninsured_vals = []
             food_vals = []
+            income_vals = []
             
             county_member_details = []
             driver_counts = defaultdict(int)
+            total_score_sum = 0.0
+
+            county_patients_only = [p for p, sdoh, eval_res in items]
 
             for p, sdoh, eval_res in items:
                 level_5 = eval_res["future_risk_5"]["level"]
@@ -420,6 +657,7 @@ class CountyRiskMapView(APIView):
                 if level_3 in counts_3_class:
                     counts_3_class[level_3] += 1
 
+                total_score_sum += risk_weights_5.get(level_5, 2.0)
                 driver = eval_res["driver"]
                 driver_counts[driver] += 1
 
@@ -429,9 +667,11 @@ class CountyRiskMapView(APIView):
                     if sdoh.unemployment_2022 is not None: unemployment_vals.append(sdoh.unemployment_2022)
                     if sdoh.uninsured_2022 is not None: uninsured_vals.append(sdoh.uninsured_2022)
                     if sdoh.food_access_population_2022 is not None: food_vals.append(sdoh.food_access_population_2022)
+                    if sdoh.income_2022 is not None: income_vals.append(sdoh.income_2022)
 
                 county_member_details.append({
                     "id": p.patient_id,
+                    "patient_id": p.patient_id,
                     "name": p.name or f"Patient {p.patient_id}",
                     "tract_fips": p.tract_fips,
                     "future_risk_5": level_5,
@@ -439,6 +679,7 @@ class CountyRiskMapView(APIView):
                     "future_risk_3": level_3,
                     "future_risk_3_confidence_pct": eval_res["future_risk_3"]["confidence_pct"],
                     "driver": driver,
+                    "driver_type": eval_res.get("driver_type", "SDOH"),
                     "priority": eval_res["intervention"]["action_headline"],
                     "encounters": int(p.encounters_last_12m or 0),
                     "ed_visits": int(p.emergency_visits_last_12m or 0),
@@ -453,6 +694,18 @@ class CountyRiskMapView(APIView):
             avg_unemp = sum(unemployment_vals) / len(unemployment_vals) if unemployment_vals else 0.0
             avg_unins = sum(uninsured_vals) / len(uninsured_vals) if uninsured_vals else 0.0
             avg_food = sum(food_vals) / len(food_vals) if food_vals else 0.0
+            avg_income = sum(income_vals) / len(income_vals) if income_vals else 0.0
+
+            # Average future risk (1.0 to 5.0 scale)
+            avg_future_risk_num = round(total_score_sum / total_members, 1) if total_members > 0 else 2.0
+
+            # SDOH Environment classification
+            if avg_pov >= 20.0 or avg_housing >= 30.0:
+                sdoh_env_label = 'High Risk'
+            elif avg_pov >= 12.0 or avg_housing >= 20.0:
+                sdoh_env_label = 'Moderate Risk'
+            else:
+                sdoh_env_label = 'Low / Stable'
 
             # Calculate composite priority score (0-100)
             risk_ratio = (counts_5_class['Critical'] * 1.0 + counts_5_class['High'] * 0.8 + counts_5_class['Moderate'] * 0.4) / total_members
@@ -473,7 +726,11 @@ class CountyRiskMapView(APIView):
                 status_label = 'Stable'
                 status_color = 'bg-teal-100 text-teal-800 border-teal-200'
 
-            # Top drivers with percentages
+            # Aggregate stored per-patient SHAP drivers (fast — no ML inference)
+            county_patient_ids = [p.id for p in county_patients_only]
+            pop_sdoh_drivers, pop_clin_drivers = compute_shap_from_stored_predictions(county_patient_ids, pred_map)
+
+            # Top drivers preview
             top_drivers = []
             for d_name, d_cnt in sorted(driver_counts.items(), key=lambda x: -x[1])[:3]:
                 top_drivers.append({
@@ -488,6 +745,8 @@ class CountyRiskMapView(APIView):
             county_list.append({
                 "id": county_name,
                 "name": county_name,
+                "county": county_name,
+                "state": "California",
                 "type": "county",
                 "lat": coords[0],
                 "lng": coords[1],
@@ -496,15 +755,20 @@ class CountyRiskMapView(APIView):
                 "priorityScore": priority_score,
                 "status": status_label,
                 "statusColor": status_color,
+                "average_future_risk": avg_future_risk_num,
+                "sdoh_environment": sdoh_env_label,
                 "future_risk_5_breakdown": counts_5_class,
                 "future_risk_3_breakdown": counts_3_class,
                 "sdoh_averages": {
                     "poverty": round(avg_pov, 1),
                     "housing_burden": round(avg_housing, 1),
+                    "income": round(avg_income, 0),
                     "unemployment": round(avg_unemp, 1),
                     "uninsured": round(avg_unins, 1),
                     "food_access": round(avg_food, 1),
                 },
+                "sdoh_drivers": pop_sdoh_drivers,
+                "clinical_drivers": pop_clin_drivers,
                 "drivers": top_drivers,
                 "members": county_member_details,
             })
@@ -532,16 +796,21 @@ class CountyRiskMapView(APIView):
             counts_3 = {'High': 0, 'Moderate': 0, 'Low': 0}
             tract_member_details = []
             t_driver_counts = defaultdict(int)
+            t_score_sum = 0.0
+
+            tract_patients_only = [p for p, s, eval_res in items]
 
             for p, s, eval_res in items:
                 level_5 = eval_res["future_risk_5"]["level"]
                 level_3 = eval_res["future_risk_3"]["level"]
                 if level_5 in counts_5: counts_5[level_5] += 1
                 if level_3 in counts_3: counts_3[level_3] += 1
+                t_score_sum += risk_weights_5.get(level_5, 2.0)
                 driver = eval_res["driver"]
                 t_driver_counts[driver] += 1
                 tract_member_details.append({
                     "id": p.patient_id,
+                    "patient_id": p.patient_id,
                     "name": p.name or f"Patient {p.patient_id}",
                     "tract_fips": p.tract_fips,
                     "future_risk_5": level_5,
@@ -549,6 +818,7 @@ class CountyRiskMapView(APIView):
                     "future_risk_3": level_3,
                     "future_risk_3_confidence_pct": eval_res["future_risk_3"]["confidence_pct"],
                     "driver": driver,
+                    "driver_type": eval_res.get("driver_type", "SDOH"),
                     "priority": eval_res["intervention"]["action_headline"],
                     "encounters": int(p.encounters_last_12m or 0),
                     "ed_visits": int(p.emergency_visits_last_12m or 0),
@@ -567,6 +837,17 @@ class CountyRiskMapView(APIView):
             broad_val = round(float(sdoh.broadband_2022 or 0), 1) if sdoh else 0.0
             edu_val = round(float(sdoh.education_2022 or 0), 1) if sdoh else 0.0
 
+            # Average future risk (1.0 to 5.0 scale)
+            t_avg_future_risk = round(t_score_sum / t_members, 1) if t_members > 0 else 2.0
+
+            # SDOH Environment classification
+            if pov_val >= 20.0 or housing_val >= 30.0:
+                t_sdoh_env = 'High Risk'
+            elif pov_val >= 12.0 or housing_val >= 20.0:
+                t_sdoh_env = 'Moderate Risk'
+            else:
+                t_sdoh_env = 'Low / Stable'
+
             # Determine dominant status
             if counts_5['Critical'] > 0:
                 t_status = 'Critical'
@@ -583,6 +864,10 @@ class CountyRiskMapView(APIView):
 
             t_priority_score = int(min(98, max(25, (90 if t_status == 'Critical' else (78 if t_status == 'Elevated' else (55 if t_status == 'Moderate' else 28))) + (pov_val * 0.2))))
 
+            # Aggregate stored per-patient SHAP drivers for this tract (fast — no ML inference)
+            tract_patient_ids = [p.id for p in tract_patients_only]
+            t_sdoh_drivers, t_clin_drivers = compute_shap_from_stored_predictions(tract_patient_ids, pred_map)
+
             t_top_drivers = []
             for d_name, d_cnt in sorted(t_driver_counts.items(), key=lambda x: -x[1])[:3]:
                 t_top_drivers.append({
@@ -597,6 +882,7 @@ class CountyRiskMapView(APIView):
                 "tract_fips": tract_fips,
                 "name": f"Tract {tract_fips}",
                 "county": county_name,
+                "state": "California",
                 "type": "tract",
                 "lat": round(t_lat, 5),
                 "lng": round(t_lng, 5),
@@ -605,6 +891,8 @@ class CountyRiskMapView(APIView):
                 "priorityScore": t_priority_score,
                 "status": t_status,
                 "statusColor": t_status_color,
+                "average_future_risk": t_avg_future_risk,
+                "sdoh_environment": t_sdoh_env,
                 "future_risk_5_breakdown": counts_5,
                 "future_risk_3_breakdown": counts_3,
                 "primary_driver": first_eval.get("driver", "SDOH Factors"),
@@ -624,24 +912,178 @@ class CountyRiskMapView(APIView):
                 "sdoh_averages": {
                     "poverty": pov_val,
                     "housing_burden": housing_val,
+                    "income": income_val,
                     "unemployment": unemp_val,
                     "uninsured": unins_val,
                     "food_access": food_val,
                 },
+                "sdoh_drivers": t_sdoh_drivers,
+                "clinical_drivers": t_clin_drivers,
                 "drivers": t_top_drivers,
                 "members": tract_member_details,
             })
 
         tract_list.sort(key=lambda t: (-t['priorityScore'], -t['total_members']))
 
-        return Response({
+        response_data = {
             "total_counties": len(county_list),
             "total_tracts": len(tract_list),
             "total_members": len(patients),
             "total_high_risk_members": total_high_priority_all,
             "counties": county_list,
-            "tracts": tract_list
+            "tracts": tract_list,
+        }
+        # Store in in-memory cache
+        _MAP_CACHE[cache_key] = (time.time(), response_data)
+        return Response(response_data, status=status.HTTP_200_OK)
+
+
+class CountyDetailRiskView(APIView):
+    """
+    GET /api/geographic-risk/county/<county_id>/
+    GET /api/map/counties/<county_id>/
+    
+    Provides deep population-level intelligence for a single selected county:
+    - Overall members & high/critical priority counts
+    - 5-Class future risk breakdown with average risk calculation
+    - SDOH environment vulnerability classification
+    - Top population TreeSHAP SDOH Drivers
+    - Top population TreeSHAP Clinical Drivers
+    - Full list of members residing in that county
+    """
+    def get(self, request, county_id):
+        engine = get_prediction_engine()
+        # Clean county ID search term
+        cleaned_search = county_id.replace('-', ' ').replace('_', ' ').strip().lower()
+        
+        # Match CommunitySDOH tracts for this county
+        sdoh_tracts = CommunitySDOH.objects.filter(county__icontains=cleaned_search)
+        tract_fips_list = [s.tract_fips for s in sdoh_tracts]
+        
+        # Match patients residing in these tracts
+        patients = list(Patient.objects.filter(tract_fips__in=tract_fips_list).order_by('patient_id'))
+        
+        # If no patients by tract match directly, search patient.community_sdoh.county
+        if not patients:
+            all_patients = Patient.objects.all()
+            patients = [p for p in all_patients if p.community_sdoh and cleaned_search in (p.community_sdoh.county or '').lower()]
+
+        if not patients:
+            # Return empty structure gracefully with 200 OK so UI can show empty state without crashing
+            county_display_name = county_id.title()
+            if 'County' not in county_display_name:
+                county_display_name += ' County'
+            return Response({
+                "county": {
+                    "id": county_id,
+                    "name": county_display_name,
+                    "state": "California"
+                },
+                "members": {
+                    "total": 0,
+                    "high_critical": 0
+                },
+                "risk_distribution": {
+                    "critical": 0,
+                    "high": 0,
+                    "moderate": 0,
+                    "low": 0,
+                    "very_low": 0
+                },
+                "average_future_risk": 0.0,
+                "sdoh_environment": "No Data",
+                "sdoh_drivers": [],
+                "clinical_drivers": [],
+                "member_list": []
+            }, status=status.HTTP_200_OK)
+
+        county_name = patients[0].community_sdoh.county if patients[0].community_sdoh else f"{county_id.title()} County"
+        sdoh_map = {s.tract_fips: s for s in CommunitySDOH.objects.filter(tract_fips__in=[p.tract_fips for p in patients])}
+        pred_map = {pred.patient_id: pred for pred in PatientRiskPrediction.objects.filter(patient__in=patients)}
+
+        counts_5 = {'Critical': 0, 'High': 0, 'Moderate': 0, 'Low': 0, 'Very Low': 0}
+        counts_3 = {'High': 0, 'Moderate': 0, 'Low': 0}
+        risk_weights_5 = {'Very Low': 1.0, 'Low': 2.0, 'Moderate': 3.0, 'High': 4.0, 'Critical': 5.0}
+        total_score_sum = 0.0
+        poverty_vals = []
+        housing_vals = []
+        member_details = []
+
+        for p in patients:
+            pred = pred_map.get(p.id)
+            if pred and not is_prediction_stale(p, pred):
+                eval_res = prediction_to_dict(pred, patient=p)
+            else:
+                eval_res = engine.predict_patient(p, save_to_db=True, verbose=False)
+
+            sdoh = sdoh_map.get(p.tract_fips)
+            level_5 = eval_res["future_risk_5"]["level"]
+            level_3 = eval_res["future_risk_3"]["level"]
+
+            if level_5 in counts_5: counts_5[level_5] += 1
+            if level_3 in counts_3: counts_3[level_3] += 1
+            total_score_sum += risk_weights_5.get(level_5, 2.0)
+
+            if sdoh:
+                if sdoh.poverty_2022 is not None: poverty_vals.append(sdoh.poverty_2022)
+                if sdoh.housing_burden_2022 is not None: housing_vals.append(sdoh.housing_burden_2022)
+
+            member_details.append({
+                "id": p.patient_id,
+                "patient_id": p.patient_id,
+                "name": p.name or f"Patient {p.patient_id}",
+                "tract_fips": p.tract_fips,
+                "future_risk_5": level_5,
+                "future_risk_3": level_3,
+                "driver": eval_res["driver"],
+                "driver_type": eval_res.get("driver_type", "SDOH"),
+                "priority": eval_res["intervention"]["action_headline"],
+                "encounters": int(p.encounters_last_12m or 0),
+                "ed_visits": int(p.emergency_visits_last_12m or 0),
+                "ip_visits": int(p.inpatient_admissions_last_12m or 0),
+            })
+
+        total_members = len(patients)
+        high_critical = counts_5['Critical'] + counts_5['High']
+        avg_future_risk = round(total_score_sum / total_members, 1) if total_members > 0 else 2.0
+        avg_pov = sum(poverty_vals) / len(poverty_vals) if poverty_vals else 0.0
+        avg_housing = sum(housing_vals) / len(housing_vals) if housing_vals else 0.0
+
+        if avg_pov >= 20.0 or avg_housing >= 30.0:
+            sdoh_env = 'High Risk'
+        elif avg_pov >= 12.0 or avg_housing >= 20.0:
+            sdoh_env = 'Moderate Risk'
+        else:
+            sdoh_env = 'Low / Stable'
+
+        sdoh_drivers, clinical_drivers = compute_population_tree_shap(patients, engine)
+
+        return Response({
+            "county": {
+                "id": county_id,
+                "name": county_name,
+                "state": "California"
+            },
+            "members": {
+                "total": total_members,
+                "high_critical": high_critical
+            },
+            "risk_distribution": {
+                "critical": counts_5['Critical'],
+                "high": counts_5['High'],
+                "moderate": counts_5['Moderate'],
+                "low": counts_5['Low'],
+                "very_low": counts_5['Very Low']
+            },
+            "future_risk_5_breakdown": counts_5,
+            "future_risk_3_breakdown": counts_3,
+            "average_future_risk": avg_future_risk,
+            "sdoh_environment": sdoh_env,
+            "sdoh_drivers": sdoh_drivers,
+            "clinical_drivers": clinical_drivers,
+            "member_list": member_details
         }, status=status.HTTP_200_OK)
+
 
 
 class OverviewView(APIView):

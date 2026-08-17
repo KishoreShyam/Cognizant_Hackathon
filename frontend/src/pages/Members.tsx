@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { 
   Users, 
   Search, 
@@ -103,7 +103,9 @@ interface SummaryMetrics {
 
 const Members: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const memberIdParam = searchParams.get('id');
+  const countyParam = searchParams.get('county');
 
   const [members, setMembers] = useState<Member[]>([]);
   const [summary, setSummary] = useState<SummaryMetrics>({
@@ -117,7 +119,7 @@ const Members: React.FC = () => {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState(countyParam || '');
   const [riskFilter, setRiskFilter] = useState('All');
   const [driverFilter, setDriverFilter] = useState('All');
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
@@ -156,6 +158,13 @@ const Members: React.FC = () => {
   useEffect(() => {
     fetchMembers();
   }, []);
+
+  // Sync county filter from URL param
+  useEffect(() => {
+    if (countyParam) {
+      setSearchQuery(countyParam);
+    }
+  }, [countyParam]);
 
   // Sync drawer state with URL param once members are loaded
   useEffect(() => {
@@ -219,11 +228,7 @@ const Members: React.FC = () => {
     }
   };
 
-  const handleCareCoordination = () => {
-    if (selectedMember) {
-      alert(`Care coordination workflow initiated for patient ${selectedMember.id} (${selectedMember.future_risk_5.level} Future Risk, Tract ${selectedMember.tract_fips}).`);
-    }
-  };
+
 
   // Helper for rendering risk badges
   const getRiskBadge = (level: string, confidencePct?: string) => {
@@ -353,7 +358,7 @@ const Members: React.FC = () => {
           onChange={(e) => { setRiskFilter(e.target.value); setCurrentPage(1); }}
           className="py-2 pl-3 pr-8 bg-white rounded-lg border border-slate-200 text-[13px] text-on-surface outline-none focus:border-primary cursor-pointer"
         >
-          <option value="All">Future Risk (5-Class): All</option>
+          <option value="All">Current Risk: All</option>
           <option value="Critical">Critical</option>
           <option value="High">High</option>
           <option value="Moderate">Moderate</option>
@@ -411,9 +416,9 @@ const Members: React.FC = () => {
               <tr>
                 <th className="py-3.5 px-6">Priority</th>
                 <th className="py-3.5 px-4">Patient ID</th>
-                <th className="py-3.5 px-4">FUTURE RISK (5-CLASS)</th>
+                <th className="py-3.5 px-4">CURRENT RISK</th>
                 <th className="py-3.5 px-4">SDOH RISK (COMMUNITY)</th>
-                <th className="py-3.5 px-4">FUTURE RISK (3-CLASS)</th>
+                <th className="py-3.5 px-4">FUTURE RISK</th>
                 <th className="py-3.5 px-4">PRIMARY DRIVER (TREE-SHAP)</th>
                 <th className="py-3.5 px-6 text-right">Action</th>
               </tr>
@@ -448,11 +453,10 @@ const Members: React.FC = () => {
                     </div>
                   </td>
                   
-                  {/* FUTURE RISK (5-CLASS) */}
+                  {/* CURRENT RISK */}
                   <td className="py-4 px-4">
                     <div className="flex items-center gap-2">
                       {getRiskBadge(member.future_risk_5.level)}
-                      <span className="text-[11px] font-bold text-slate-600">{member.future_risk_5.confidence_pct}</span>
                     </div>
                   </td>
 
@@ -468,7 +472,6 @@ const Members: React.FC = () => {
                   <td className="py-4 px-4">
                     <div className="flex items-center gap-2">
                       {getRiskBadge(member.future_risk_3.level)}
-                      <span className="text-[11px] font-bold text-slate-600">{member.future_risk_3.confidence_pct}</span>
                     </div>
                   </td>
 
@@ -786,13 +789,15 @@ const Members: React.FC = () => {
                   <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Priority Intervention</span>
                   <p className="text-[13px] font-bold text-slate-800">{selectedMember.priority_label}</p>
                 </div>
-                <button 
-                  onClick={handleCareCoordination}
-                  className="w-full py-3 bg-primary text-white rounded-xl font-bold text-[13px] hover:bg-primary/95 transition-colors flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+                <button
+                  onClick={() => navigate(`/ai-assistant?patient=${encodeURIComponent(selectedMember.id)}`)}
+                  className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-[13px] transition-colors flex items-center justify-center gap-2 shadow-sm cursor-pointer"
                 >
-                  <span>Initiate Care Coordination</span>
+                  <Sparkles className="w-4 h-4" />
+                  <span>Deep Understanding</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
+                <p className="text-[10px] text-slate-400 text-center mt-2">AI explains ML predictions · LangChain + OpenAI</p>
               </div>
             </>
           )}

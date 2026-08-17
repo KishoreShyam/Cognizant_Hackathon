@@ -7,6 +7,7 @@ import ClinicalRisk from './pages/ClinicalRisk';
 import RiskMap from './pages/RiskMap';
 import SDOHAnalysis from './pages/SDOHAnalysis';
 import Interventions from './pages/Interventions';
+import AIAssistant from './pages/AIAssistant';
 
 function App() {
   return (
@@ -101,6 +102,20 @@ function App() {
                   </main>
                 </>
               } 
+            />
+            <Route
+              path="/ai-assistant"
+              element={
+                <>
+                  <Header
+                    title="Patient Risk Understanding Assistant"
+                    subtitle="AI-powered explanation of ML predictions for care-management decision support"
+                  />
+                  <main className="p-4 md:p-6 flex flex-col gap-0 w-full flex-1">
+                    <AIAssistant />
+                  </main>
+                </>
+              }
             />
           </Routes>
         </div>

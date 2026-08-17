@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Heart, 
@@ -31,6 +31,8 @@ interface ClinicalCohortMember {
   encounters: number;
   medicationsCount: number;
   proceduresCount: number;
+  chronicCount: number;
+  diagnosesCount: number;
   future_risk_5: any;
   details: string[];
 }
@@ -42,6 +44,7 @@ const ClinicalRisk: React.FC = () => {
   const [selectedMember, setSelectedMember] = useState<ClinicalCohortMember | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
+  const [selectedQuadrant, setSelectedQuadrant] = useState<string | null>(null);
   const pageSize = 8;
 
   const fetchClinicalData = async () => {
@@ -79,6 +82,8 @@ const ClinicalRisk: React.FC = () => {
           encounters: enc,
           medicationsCount: m.medicationsCount || 0,
           proceduresCount: m.proceduresCount || 0,
+          chronicCount: m.chronicCount || 0,
+          diagnosesCount: m.diagnosesCount || 0,
           future_risk_5: m.future_risk_5,
           details: m.details || []
         };
@@ -108,6 +113,8 @@ const ClinicalRisk: React.FC = () => {
             encounters: m.encounters || 0,
             medicationsCount: m.medicationsCount || 0,
             proceduresCount: m.proceduresCount || 0,
+            chronicCount: m.chronicCount || 0,
+            diagnosesCount: m.diagnosesCount || 0,
             future_risk_5: m.future_risk_5,
             details: m.details || []
           }));
@@ -131,21 +138,77 @@ const ClinicalRisk: React.FC = () => {
   const multiConditionCount = members.filter(m => m.conditions.length >= 2).length;
   const avgScore = totalMembers > 0 ? Math.round(members.reduce((acc, m) => acc + m.score, 0) / totalMembers) : 45;
 
-  const donutData = [
-    { name: 'Chronic Diagnoses', value: 38, color: '#005599' },
-    { name: 'Acute Utilization', value: 31, color: '#046a64' },
-    { name: 'Active Medications', value: 18, color: '#455668' },
-    { name: 'Diagnostic Procedures', value: 13, color: '#a3c9ff' }
-  ];
-
   const handleOpenDrawer = (member: ClinicalCohortMember) => {
     setSelectedMember(member);
     setIsDrawerOpen(true);
   };
 
+  // Quadrant statistics computed dynamically from full cohort
+  const quadrantStats = useMemo(() => {
+    let crisis = 0;
+    let chronic = 0;
+    let utilizer = 0;
+    let baseline = 0;
+    
+    members.forEach(m => {
+      const isHighBurden = m.conditions.length >= 2;
+      const isHighUtil = (m.edVisits + m.ipVisits) >= 1;
+      if (isHighBurden && isHighUtil) crisis++;
+      else if (isHighBurden && !isHighUtil) chronic++;
+      else if (!isHighBurden && isHighUtil) utilizer++;
+      else baseline++;
+    });
+    return { crisis, chronic, utilizer, baseline };
+  }, [members]);
+
+  // Filter cohort based on selected quadrant
+  const filteredMembers = useMemo(() => {
+    if (!selectedQuadrant) return members;
+    return members.filter(m => {
+      const isHighBurden = m.conditions.length >= 2;
+      const isHighUtil = (m.edVisits + m.ipVisits) >= 1;
+      if (selectedQuadrant === 'crisis') return isHighBurden && isHighUtil;
+      if (selectedQuadrant === 'chronic') return isHighBurden && !isHighUtil;
+      if (selectedQuadrant === 'utilizer') return !isHighBurden && isHighUtil;
+      if (selectedQuadrant === 'baseline') return !isHighBurden && !isHighUtil;
+      return true;
+    });
+  }, [members, selectedQuadrant]);
+
+  // Reset pagination to page 1 when filter changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedQuadrant]);
+
+  // Disease Complexity breakdown from the full members list
+  const comorbidityStats = useMemo(() => {
+    let severeChronic = 0;
+    let highPolypharmacy = 0;
+    let acuteCare = 0;
+    let frequentOutpatient = 0;
+    let highProcedures = 0;
+    
+    members.forEach(m => {
+      if (m.chronicCount >= 3) severeChronic++;
+      if (m.medicationsCount >= 5) highPolypharmacy++;
+      if (m.edVisits > 0 || m.ipVisits > 0) acuteCare++;
+      if (m.encounters >= 8) frequentOutpatient++;
+      if (m.proceduresCount >= 4) highProcedures++;
+    });
+    
+    const total = members.length || 1;
+    return [
+      { label: 'Severe Chronic Burden (≥3 Chronic)', count: severeChronic, pct: Math.round((severeChronic / total) * 100), color: 'bg-rose-500', barC: '#f43f5e', desc: 'Patients with multiple active chronic diagnoses' },
+      { label: 'High Polypharmacy (≥5 Medications)', count: highPolypharmacy, pct: Math.round((highPolypharmacy / total) * 100), color: 'bg-orange-500', barC: '#f97316', desc: 'Increased drug interactions / compliance risk' },
+      { label: 'Acute Care Utilizers (≥1 ED/IP)', count: acuteCare, pct: Math.round((acuteCare / total) * 100), color: 'bg-amber-500', barC: '#f59e0b', desc: 'Recent emergency room or inpatient stays' },
+      { label: 'High Encounter Frequency (≥8 visits)', count: frequentOutpatient, pct: Math.round((frequentOutpatient / total) * 100), color: 'bg-blue-500', barC: '#3b82f6', desc: 'Frequent clinic contact and provider visits' },
+      { label: 'High Procedure Load (≥4 Procedures)', count: highProcedures, pct: Math.round((highProcedures / total) * 100), color: 'bg-emerald-500', barC: '#10b981', desc: 'Surgical or diagnostic procedures performed' }
+    ];
+  }, [members]);
+
   // Pagination
-  const totalPages = Math.ceil(members.length / pageSize) || 1;
-  const paginatedMembers = members.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const totalPages = Math.ceil(filteredMembers.length / pageSize) || 1;
+  const paginatedMembers = filteredMembers.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   return (
     <div className="flex flex-col gap-8 w-full">
@@ -219,74 +282,170 @@ const ClinicalRisk: React.FC = () => {
 
       {/* Two Column Graphs */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* Clinical Risk Donut */}
-        <div className="glass-card p-6 flex flex-col justify-between min-h-[380px]">
-          <h3 className="text-md font-bold text-on-surface mb-4">Clinical Component Synthesis</h3>
-          <div className="flex-1 flex flex-col sm:flex-row items-center justify-center gap-6">
-            <div className="relative w-40 h-40 shrink-0">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={donutData}
-                    innerRadius={55}
-                    outerRadius={70}
-                    paddingAngle={3}
-                    dataKey="value"
-                  >
-                    {donutData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                </PieChart>
-              </ResponsiveContainer>
-              <div className="absolute inset-0 flex flex-col items-center justify-center">
-                <span className="text-2xl font-extrabold text-on-surface leading-none">{avgScore}%</span>
-                <span className="text-[10px] font-bold text-on-surface-variant uppercase mt-1">Avg Acuity</span>
-              </div>
+        
+        {/* Left Column: Interactive Stratification Risk Matrix */}
+        <div className="glass-card p-6 flex flex-col min-h-[385px] justify-between">
+          <div>
+            <div className="flex justify-between items-start mb-1">
+              <h3 className="text-md font-bold text-on-surface">Clinical Stratification Matrix</h3>
+              {selectedQuadrant && (
+                <button 
+                  onClick={() => setSelectedQuadrant(null)} 
+                  className="text-xs font-bold text-blue-600 hover:text-blue-800 transition underline cursor-pointer"
+                >
+                  Clear Filter
+                </button>
+              )}
             </div>
+            <p className="text-[12px] text-slate-500 mb-4">
+              Cluster patient cohorts by chronic burden and acute care visits. Click any quadrant to filter the table.
+            </p>
+          </div>
 
-            <div className="flex-1 w-full flex flex-col gap-3">
-              {donutData.map((item, index) => (
-                <div key={index} className="border border-slate-200/50 rounded-lg p-2.5 bg-white/40">
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="text-[12px] font-bold flex items-center gap-2">
-                      <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: item.color }}></span>
-                      {item.name}
-                    </span>
-                    <span className="text-[12px] font-extrabold text-slate-800">{item.value}%</span>
-                  </div>
-                  <div className="w-full bg-slate-200/40 h-1 rounded-full overflow-hidden">
-                    <div className="h-full rounded-full" style={{ backgroundColor: item.color, width: `${item.value}%` }}></div>
-                  </div>
+          <div className="grid grid-cols-2 gap-3 flex-1">
+            
+            {/* Top Left: Frequent Acute Utilizers */}
+            <button
+              onClick={() => setSelectedQuadrant(selectedQuadrant === 'utilizer' ? null : 'utilizer')}
+              className={`p-3.5 rounded-xl border text-left flex flex-col justify-between transition-all duration-200 cursor-pointer ${
+                selectedQuadrant === 'utilizer'
+                  ? 'bg-amber-50 border-amber-500 ring-2 ring-amber-500/20'
+                  : 'bg-slate-50/50 hover:bg-amber-50/30 border-slate-200/60 hover:border-amber-300'
+              }`}
+            >
+              <div>
+                <div className="flex justify-between items-center">
+                  <span className="text-[10px] font-bold text-amber-700 bg-amber-100/60 rounded px-1.5 py-0.5 uppercase tracking-wide">
+                    Frequent Utilizer
+                  </span>
+                  {selectedQuadrant === 'utilizer' && <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>}
                 </div>
-              ))}
-            </div>
+                <p className="text-[10px] text-slate-500 mt-1.5 font-medium">Low Burden + High Acute</p>
+              </div>
+              <div className="mt-3 flex items-baseline gap-1.5">
+                <span className="text-2xl font-extrabold text-amber-950">{quadrantStats.utilizer}</span>
+                <span className="text-[11px] text-slate-400 font-semibold">
+                  ({totalMembers > 0 ? Math.round((quadrantStats.utilizer / totalMembers) * 100) : 0}%)
+                </span>
+              </div>
+            </button>
+
+            {/* Top Right: Immediate Clinical Crisis */}
+            <button
+              onClick={() => setSelectedQuadrant(selectedQuadrant === 'crisis' ? null : 'crisis')}
+              className={`p-3.5 rounded-xl border text-left flex flex-col justify-between transition-all duration-200 cursor-pointer ${
+                selectedQuadrant === 'crisis'
+                  ? 'bg-rose-50 border-rose-500 ring-2 ring-rose-500/20'
+                  : 'bg-slate-50/50 hover:bg-rose-50/30 border-slate-200/60 hover:border-rose-300'
+              }`}
+            >
+              <div>
+                <div className="flex justify-between items-center">
+                  <span className="text-[10px] font-bold text-rose-700 bg-rose-100/60 rounded px-1.5 py-0.5 uppercase tracking-wide">
+                    Clinical Crisis
+                  </span>
+                  {selectedQuadrant === 'crisis' && <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>}
+                </div>
+                <p className="text-[10px] text-slate-500 mt-1.5 font-medium">High Burden + High Acute</p>
+              </div>
+              <div className="mt-3 flex items-baseline gap-1.5">
+                <span className="text-2xl font-extrabold text-rose-950">{quadrantStats.crisis}</span>
+                <span className="text-[11px] text-slate-400 font-semibold">
+                  ({totalMembers > 0 ? Math.round((quadrantStats.crisis / totalMembers) * 100) : 0}%)
+                </span>
+              </div>
+            </button>
+
+            {/* Bottom Left: Well-Managed Baseline */}
+            <button
+              onClick={() => setSelectedQuadrant(selectedQuadrant === 'baseline' ? null : 'baseline')}
+              className={`p-3.5 rounded-xl border text-left flex flex-col justify-between transition-all duration-200 cursor-pointer ${
+                selectedQuadrant === 'baseline'
+                  ? 'bg-emerald-50 border-emerald-500 ring-2 ring-emerald-500/20'
+                  : 'bg-slate-50/50 hover:bg-emerald-50/30 border-slate-200/60 hover:border-emerald-300'
+              }`}
+            >
+              <div>
+                <div className="flex justify-between items-center">
+                  <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100/60 rounded px-1.5 py-0.5 uppercase tracking-wide">
+                    Managed Baseline
+                  </span>
+                  {selectedQuadrant === 'baseline' && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>}
+                </div>
+                <p className="text-[10px] text-slate-500 mt-1.5 font-medium">Low Burden + Low Acute</p>
+              </div>
+              <div className="mt-3 flex items-baseline gap-1.5">
+                <span className="text-2xl font-extrabold text-emerald-950">{quadrantStats.baseline}</span>
+                <span className="text-[11px] text-slate-400 font-semibold">
+                  ({totalMembers > 0 ? Math.round((quadrantStats.baseline / totalMembers) * 100) : 0}%)
+                </span>
+              </div>
+            </button>
+
+            {/* Bottom Right: High-Need Chronic */}
+            <button
+              onClick={() => setSelectedQuadrant(selectedQuadrant === 'chronic' ? null : 'chronic')}
+              className={`p-3.5 rounded-xl border text-left flex flex-col justify-between transition-all duration-200 cursor-pointer ${
+                selectedQuadrant === 'chronic'
+                  ? 'bg-indigo-50 border-indigo-500 ring-2 ring-indigo-500/20'
+                  : 'bg-slate-50/50 hover:bg-indigo-50/30 border-slate-200/60 hover:border-indigo-300'
+              }`}
+            >
+              <div>
+                <div className="flex justify-between items-center">
+                  <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100/60 rounded px-1.5 py-0.5 uppercase tracking-wide">
+                    High-Need Chronic
+                  </span>
+                  {selectedQuadrant === 'chronic' && <span className="w-1.5 h-1.5 rounded-full bg-indigo-500"></span>}
+                </div>
+                <p className="text-[10px] text-slate-500 mt-1.5 font-medium">High Burden + Low Acute</p>
+              </div>
+              <div className="mt-3 flex items-baseline gap-1.5">
+                <span className="text-2xl font-extrabold text-indigo-950">{quadrantStats.chronic}</span>
+                <span className="text-[11px] text-slate-400 font-semibold">
+                  ({totalMembers > 0 ? Math.round((quadrantStats.chronic / totalMembers) * 100) : 0}%)
+                </span>
+              </div>
+            </button>
+
           </div>
         </div>
 
-        {/* Top Drivers */}
-        <div className="glass-card p-6 flex flex-col justify-between min-h-[380px]">
-          <h3 className="text-md font-bold text-on-surface mb-4">Top Clinical Acuity Factors</h3>
-          <div className="flex flex-col gap-4.5 flex-1 justify-center">
-            {[
-              { label: 'Multiple Chronic Diagnoses', val: 78, color: 'bg-error' },
-              { label: 'Emergency Room Touchpoints', val: 65, color: 'bg-error' },
-              { label: 'High Healthcare Utilization', val: 58, color: 'bg-tertiary' },
-              { label: 'Active Polypharmacy Profile', val: 46, color: 'bg-tertiary' },
-              { label: 'Acute Inpatient Hospitalization', val: 32, color: 'bg-primary-container' }
-            ].map((driver, index) => (
-              <div key={index}>
-                <div className="flex justify-between mb-1.5 text-[13px] font-semibold text-slate-700">
-                  <span>{driver.label}</span>
-                  <span className="font-extrabold">{driver.val}%</span>
+        {/* Right Column: Disease Comorbidity Radar/Breakdown */}
+        <div className="glass-card p-6 flex flex-col min-h-[385px] justify-between">
+          <div>
+            <h3 className="text-md font-bold text-on-surface mb-0.5">Cohort Disease Prevalence</h3>
+            <p className="text-[12px] text-slate-500 mb-4">
+              Real-time diagnosis category distribution based on patient records.
+            </p>
+          </div>
+          
+          <div className="flex flex-col gap-3 flex-1 justify-center">
+            {comorbidityStats.map((item, index) => (
+              <div key={index} className="border border-slate-200/40 rounded-xl p-2.5 bg-white/40">
+                <div className="flex justify-between items-center mb-1">
+                  <div>
+                    <span className="text-[12.5px] font-bold text-slate-800">{item.label}</span>
+                    <span className="text-[10px] text-slate-400 font-medium block mt-0.5 leading-none">
+                      {item.desc}
+                    </span>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <span className="text-[12.5px] font-extrabold text-slate-900">{item.count}</span>
+                    <span className="text-[10px] text-slate-400 font-bold ml-1">({item.pct}%)</span>
+                  </div>
                 </div>
-                <div className="w-full bg-slate-200/40 h-2 rounded-full overflow-hidden">
-                  <div className={`h-full rounded-full ${driver.color}`} style={{ width: `${driver.val}%` }}></div>
+                <div className="w-full bg-slate-100/80 h-1.5 rounded-full overflow-hidden mt-1.5">
+                  <div 
+                    className={`h-full rounded-full ${item.color} transition-all duration-500`} 
+                    style={{ width: `${item.pct}%` }}
+                  ></div>
                 </div>
               </div>
             ))}
           </div>
         </div>
+
       </div>
 
       {/* Cohort Table */}
