@@ -141,12 +141,9 @@ const RiskMap: React.FC = () => {
     setError(null);
     try {
       const url = forceRefresh
-        ? 'http://127.0.0.1:8000/api/map/counties/?refresh=1'
-        : 'http://127.0.0.1:8000/api/map/counties/';
-      const fallbackUrl = forceRefresh
         ? '/api/map/counties/?refresh=1'
         : '/api/map/counties/';
-      const response = await fetch(url).catch(() => fetch(fallbackUrl));
+      const response = await fetch(url);
       if (!response.ok) throw new Error(`Failed to load map data (HTTP ${response.status})`);
       const data: MapApiResponse = await response.json();
       setCounties(data.counties || []);
@@ -571,7 +568,7 @@ const RiskMap: React.FC = () => {
                           </div>
                           <div className="flex justify-between text-[11px] text-slate-500">
                             <span>Affected: <strong className="text-slate-700">{driver.affected_display}</strong></span>
-                            <span>County Avg: <strong className="text-slate-700">{driver.average_value}</strong></span>
+                            <span>{selectedRegion.type === 'tract' ? 'Tract Avg' : 'County Avg'}: <strong className="text-slate-700">{driver.average_value}</strong></span>
                           </div>
                         </div>
                       ))}
@@ -603,7 +600,7 @@ const RiskMap: React.FC = () => {
                           </div>
                           <div className="flex justify-between text-[11px] text-slate-500">
                             <span>Affected: <strong className="text-slate-700">{driver.affected_display}</strong></span>
-                            <span>County Avg: <strong className="text-slate-700">{driver.average_value}</strong></span>
+                            <span>{selectedRegion.type === 'tract' ? 'Tract Avg' : 'County Avg'}: <strong className="text-slate-700">{driver.average_value}</strong></span>
                           </div>
                         </div>
                       ))}
@@ -754,8 +751,8 @@ const RiskMap: React.FC = () => {
             <div className="px-4 py-3">
               {top5ClinicalDrivers.length > 0 ? (() => {
                 const cx = 92, cy = 90;
-                const radii = [65, 51, 39, 27, 16];
-                const SW = 10;
+                const radii = [78, 67, 56, 45, 34];
+                const SW = 8;
                 const COLORS = ['#ef4444', '#f97316', '#f59e0b', '#3b82f6', '#8b5cf6'];
                 return (
                   <svg viewBox="0 0 560 186" className="w-full">
@@ -795,13 +792,13 @@ const RiskMap: React.FC = () => {
                       );
                     })}
                     {/* Center summary */}
-                    <text x={cx} y={cy - 7} textAnchor="middle" fontSize={20} fill="#0f172a" fontWeight="900">
+                    <text x={cx} y={cy - 6} textAnchor="middle" fontSize={18} fill="#0f172a" fontWeight="900">
                       {selectedRegion.high_risk_members}
                     </text>
-                    <text x={cx} y={cy + 8} textAnchor="middle" fontSize={8} fill="#64748b" fontWeight="700" letterSpacing="0.5">
+                    <text x={cx} y={cy + 6} textAnchor="middle" fontSize={8} fill="#475569" fontWeight="700" letterSpacing="0.5">
                       HIGH RISK
                     </text>
-                    <text x={cx} y={cy + 20} textAnchor="middle" fontSize={8} fill="#94a3b8">
+                    <text x={cx} y={cy + 16} textAnchor="middle" fontSize={8} fill="#64748b">
                       members
                     </text>
                   </svg>

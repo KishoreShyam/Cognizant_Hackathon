@@ -544,7 +544,8 @@ def compute_shap_from_stored_predictions(patient_ids: list, pred_map: dict) -> t
     for feat, acc in feat_accum.items():
         mean_abs = acc['abs_shap_sum'] / total_n
         mean_s = acc['shap_sum'] / total_n
-        affected_cnt = acc['pos_count'] or (acc['count'] if mean_abs > 0.01 else 0)
+        # Affected count only tracks positive risk contributors (where shap_value > 0.0001)
+        affected_cnt = acc['pos_count']
         affected_pct = round(affected_cnt / total_n * 100, 1) if total_n > 0 else 0.0
 
         raw_vals = acc['raw_vals']
@@ -737,7 +738,12 @@ def compute_current_population_drivers(patients_list, pred_map):
     if not patients_list:
         return [], []
 
-    total_n = len(patients_list)
+    # Only include patients with valid predictions in pred_map for accurate statistics
+    valid_patients = [p for p in patients_list if p.PATIENT_ID in pred_map]
+    total_n = len(valid_patients)
+    if total_n == 0:
+        return [], []
+
     clin_accum = {}
     sdoh_accum = {}
     
@@ -797,8 +803,9 @@ def compute_current_population_drivers(patients_list, pred_map):
         n = len(acc['raw_vals']) or 1
         mean_abs = acc['abs_shap_sum'] / n
         mean_s = acc['shap_sum'] / n
-        affected_cnt = acc['pos_count'] or (acc['count'] if mean_abs > 0.01 else 0)
-        affected_pct = round(affected_cnt / n * 100, 1)
+        # Affected count only tracks positive risk contributors (where shap_value > 0.0001)
+        affected_cnt = acc['pos_count']
+        affected_pct = round(affected_cnt / total_n * 100, 1) if total_n > 0 else 0.0
         
         avg_val_raw = sum(acc['raw_vals']) / len(acc['raw_vals']) if acc['raw_vals'] else 0.0
         avg_val_str = str(int(round(avg_val_raw))) if abs(avg_val_raw - round(avg_val_raw)) < 0.05 else f"{avg_val_raw:.1f}"
@@ -1681,10 +1688,11 @@ class OverviewView(APIView):
 
             # Categorize clinical vs SDOH elevation
             if is_high_5:
-                if driver_type == 'Clinical':
-                    clinical_only_high += 1
-                else:
+                is_sdoh_elevated = (pov >= 20.0 or house >= 30.0)
+                if is_sdoh_elevated:
                     elevated_by_sdoh += 1
+                else:
+                    clinical_only_high += 1
 
             # Priority Score (0-100)
             score_5_mapped = 90 if level_5 in ['VERY HIGH', 'CRITICAL'] else (75 if level_5 == 'HIGH' else (50 if level_5 == 'MEDIUM' else 25))

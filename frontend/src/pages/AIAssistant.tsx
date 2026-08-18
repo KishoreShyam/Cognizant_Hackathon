@@ -7,13 +7,8 @@ import {
   AlertTriangle,
   Brain,
   MapPin,
-  TrendingUp,
-  Activity,
-  Sparkles,
-  RefreshCw,
   User,
-  ShieldAlert,
-  BarChart2,
+  RefreshCw,
 } from 'lucide-react';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -57,7 +52,7 @@ interface ChatMessage {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-const API_BASE = 'http://127.0.0.1:8000/api';
+const API_BASE = '/api';
 
 const riskColors: Record<string, { bg: string; text: string; border: string; dot: string }> = {
   Critical: { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200', dot: 'bg-red-500' },
@@ -69,15 +64,6 @@ const riskColors: Record<string, { bg: string; text: string; border: string; dot
 
 const getRiskStyle = (level: string) => riskColors[level] || { bg: 'bg-slate-50', text: 'text-slate-700', border: 'border-slate-200', dot: 'bg-slate-400' };
 
-const QUICK_ACTIONS = [
-  { key: 'explain_risk',           label: 'Explain Risk',           icon: TrendingUp,  color: 'text-blue-600 border-blue-200 hover:bg-blue-50' },
-  { key: 'explain_shap',           label: 'SHAP Drivers',           icon: Sparkles,    color: 'text-purple-600 border-purple-200 hover:bg-purple-50' },
-  { key: 'clinical_assessment',    label: 'Clinical Assessment',    icon: Activity,    color: 'text-rose-600 border-rose-200 hover:bg-rose-50' },
-  { key: 'sdoh_assessment',        label: 'SDOH Assessment',        icon: MapPin,      color: 'text-emerald-600 border-emerald-200 hover:bg-emerald-50' },
-  { key: 'compare_tract',          label: 'Compare Tract vs CA',    icon: BarChart2,   color: 'text-cyan-600 border-cyan-200 hover:bg-cyan-50' },
-  { key: 'intervention_suggestions', label: 'Interventions',        icon: ShieldAlert, color: 'text-orange-600 border-orange-200 hover:bg-orange-50' },
-  { key: 'summarize_patient',      label: 'Summarize Patient',      icon: Brain,       color: 'text-indigo-600 border-indigo-200 hover:bg-indigo-50' },
-] as const;
 
 const LOADING_STEPS = [
   'Analyzing patient context...',
@@ -254,7 +240,7 @@ const AIAssistant: React.FC = () => {
       setMessages([{
         id: genId(),
         role: 'assistant',
-        content: `Hello! I'm the CareSync Risk Understanding Assistant.\n\nI'm ready to help you understand **${data.name}**'s risk profile. This member is currently classified as **${risk} Future Risk** (5-Class CatBoost model, ${data.risk_5_confidence_pct} confidence).\n\nThe primary driver identified by the ML system is **${topDriver}**. I can explain the SHAP drivers, assess the SDOH and clinical factors, and help identify potential care-management considerations.\n\nUse the quick-action buttons below or ask me anything about this member.`,
+        content: `Hello! I'm the CareSync Risk Understanding Assistant.\n\nI'm ready to help you understand **${data.name}**'s risk profile. This member is currently classified as **${risk} Future Risk** (5-Class CatBoost model, ${data.risk_5_confidence_pct} confidence).\n\nThe primary driver identified by the ML system is **${topDriver}**. I can explain the SHAP drivers, assess the SDOH and clinical factors, and help identify potential care-management considerations.\n\nAsk me anything about this member.`,
         timestamp: new Date(),
       }]);
     } catch (err: any) {
@@ -334,51 +320,6 @@ const AIAssistant: React.FC = () => {
     }
   }, [isSending, patientId, messages]);
 
-  // ── Quick action ──
-  const handleQuickAction = async (actionKey: string) => {
-    if (isSending) return;
-    const action = QUICK_ACTIONS.find(a => a.key === actionKey);
-    const label = action?.label || actionKey;
-
-    const userMsg: ChatMessage = { id: genId(), role: 'user', content: label, timestamp: new Date() };
-    const loadingMsg: ChatMessage = { id: genId(), role: 'assistant', content: '', timestamp: new Date(), isLoading: true };
-
-    setMessages(prev => [...prev, userMsg, loadingMsg]);
-    setIsSending(true);
-    startLoadingAnimation();
-
-    try {
-      const res = await fetch(`${API_BASE}/agent/quick-action/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ patient_id: patientId, action: actionKey }),
-      }).catch(() =>
-        fetch('/api/agent/quick-action/', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ patient_id: patientId, action: actionKey }),
-        })
-      );
-
-      const data = await res.json();
-      const reply = data.response || data.error || 'I was unable to generate a response.';
-
-      setMessages(prev =>
-        prev.map(m => m.isLoading ? { ...m, content: reply, isLoading: false, timestamp: new Date() } : m)
-      );
-    } catch {
-      setMessages(prev =>
-        prev.map(m =>
-          m.isLoading
-            ? { ...m, content: 'The AI assistant is temporarily unavailable. Please try again.', isLoading: false, timestamp: new Date() }
-            : m
-        )
-      );
-    } finally {
-      setIsSending(false);
-      stopLoadingAnimation();
-    }
-  };
 
   // ── Keyboard handler ──
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -441,7 +382,6 @@ const AIAssistant: React.FC = () => {
             <Brain className="w-3.5 h-3.5 text-white" />
           </div>
           <span className="text-[13px] font-extrabold text-slate-800 uppercase tracking-wide">Patient Risk Understanding Assistant</span>
-          <span className="text-[10px] px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full font-bold border border-blue-200">AI · LangChain</span>
         </div>
       </div>
 
@@ -475,27 +415,6 @@ const AIAssistant: React.FC = () => {
               </div>
             </div>
 
-            {/* Risk mini-cards */}
-            <div className="flex items-center gap-2 flex-wrap">
-              <div className="text-center px-3 py-1.5 bg-slate-50 rounded-lg border border-slate-200">
-                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">5-Class Risk</p>
-                <p className={`text-[13px] font-extrabold ${riskStyle?.text || 'text-slate-700'}`}>{context.risk_5_level}</p>
-                <p className="text-[9px] text-slate-400">{context.risk_5_confidence_pct}</p>
-              </div>
-              <div className="text-center px-3 py-1.5 bg-slate-50 rounded-lg border border-slate-200">
-                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">3-Class Risk</p>
-                <p className="text-[13px] font-extrabold text-slate-700">{context.risk_3_level}</p>
-                <p className="text-[9px] text-slate-400">{context.risk_3_confidence_pct}</p>
-              </div>
-              <div className="text-center px-3 py-1.5 bg-slate-50 rounded-lg border border-slate-200">
-                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Driver Type</p>
-                <p className="text-[13px] font-extrabold text-slate-700">{context.driver_type}</p>
-              </div>
-              <div className="text-center px-3 py-1.5 bg-blue-50 rounded-lg border border-blue-100 max-w-[140px]">
-                <p className="text-[9px] font-bold text-blue-500 uppercase tracking-wider">Primary Driver</p>
-                <p className="text-[11px] font-bold text-blue-700 leading-tight">{context.primary_driver?.split('(')[0].trim()}</p>
-              </div>
-            </div>
           </div>
         </div>
       )}
@@ -503,23 +422,6 @@ const AIAssistant: React.FC = () => {
       {/* ── Chat + Quick Actions column ── */}
       <div className="flex-1 flex flex-col min-h-0 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
 
-        {/* Quick Action Buttons */}
-        <div className="shrink-0 px-4 pt-3 pb-2 border-b border-slate-100 flex flex-wrap gap-2">
-          {QUICK_ACTIONS.map(action => {
-            const Icon = action.icon;
-            return (
-              <button
-                key={action.key}
-                onClick={() => handleQuickAction(action.key)}
-                disabled={isSending}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[11px] font-bold transition-all cursor-pointer disabled:opacity-50 ${action.color}`}
-              >
-                <Icon className="w-3.5 h-3.5" />
-                {action.label}
-              </button>
-            );
-          })}
-        </div>
 
         {/* Chat Messages */}
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4 bg-slate-50/30 custom-scrollbar">

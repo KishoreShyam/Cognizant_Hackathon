@@ -67,22 +67,13 @@ const Interventions: React.FC = () => {
     setIsLoading(true);
     setError(null);
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/interventions/');
+      const res = await fetch('/api/interventions/');
       if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
       const json: InterventionsApiResponse = await res.json();
       setCandidates(json.candidates);
       setSummary(json.summary);
     } catch (err: any) {
       console.error('Error fetching interventions:', err);
-      try {
-        const resFallback = await fetch('/api/interventions/');
-        if (resFallback.ok) {
-          const json: InterventionsApiResponse = await resFallback.json();
-          setCandidates(json.candidates);
-          setSummary(json.summary);
-          return;
-        }
-      } catch {}
       setError(err.message || 'Unable to connect to interventions API');
     } finally {
       setIsLoading(false);

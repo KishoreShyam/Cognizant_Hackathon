@@ -50,7 +50,7 @@ const ClinicalRisk: React.FC = () => {
   const fetchClinicalData = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/members/');
+      const res = await fetch('/api/members/');
       if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
       const data = await res.json();
       

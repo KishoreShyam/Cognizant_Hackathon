@@ -5,9 +5,6 @@ import {
   Users, 
   Map, 
   BarChart3,
-  CheckSquare, 
-  Settings, 
-  HelpCircle,
   ShieldAlert,
   LogOut,
   Upload
@@ -22,7 +19,6 @@ const Sidebar: React.FC = () => {
     { path: '/upload', label: 'Upload Patient', icon: Upload },
     { path: '/map', label: 'Risk Map', icon: Map },
     { path: '/sdoh-analysis', label: 'SDOH Analysis', icon: BarChart3 },
-    { path: '/interventions', label: 'Priority & Interventions', icon: CheckSquare },
     { path: '/community-interventions', label: 'Community Interventions', icon: ShieldAlert },
   ];
 
@@ -67,14 +63,6 @@ const Sidebar: React.FC = () => {
 
         {/* Footer Links */}
         <div className="mt-auto pt-6 border-t border-slate-200/40 flex flex-col gap-1.5">
-          <a href="#" className="flex items-center gap-3 px-4 py-3 text-on-surface-variant hover:bg-slate-100/60 hover:text-primary transition-colors rounded-xl font-medium text-[14px]">
-            <Settings className="w-5 h-5 shrink-0" />
-            <span>Settings</span>
-          </a>
-          <a href="#" className="flex items-center gap-3 px-4 py-3 text-on-surface-variant hover:bg-slate-100/60 hover:text-primary transition-colors rounded-xl font-medium text-[14px]">
-            <HelpCircle className="w-5 h-5 shrink-0" />
-            <span>Support</span>
-          </a>
           <button 
             onClick={() => signOut(auth)}
             className="w-full flex items-center gap-3 px-4 py-3 text-red-600 hover:bg-red-50 transition-colors rounded-xl font-medium text-[14px] cursor-pointer text-left"

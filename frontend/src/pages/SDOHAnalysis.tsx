@@ -10,8 +10,8 @@ import {
   Info
 } from 'lucide-react';
 
-const DEFAULT_POWERBI_URL = "https://app.powerbi.com/reportEmbed?reportId=e4d08e55-a799-495c-9675-27c15921a0b3&autoAuth=true&ctid=28f17ad2-29c7-482d-9410-3e5029bb9b0d";
-const REPORT_TITLE = "sdohrsik1 (1)";
+const DEFAULT_POWERBI_URL = "https://app.powerbi.com/reportEmbed?reportId=35db6382-8163-4965-afc5-f908a616217b&autoAuth=true&ctid=28f17ad2-29c7-482d-9410-3e5029bb9b0d";
+const REPORT_TITLE = "sdohrsik2";
 
 const SDOHAnalysis: React.FC = () => {
   // Power BI Embed URL state (initialized with user's Power BI report)

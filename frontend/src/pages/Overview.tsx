@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
-  Users, AlertTriangle, Globe, Brain, Flag, Info, TrendingUp, TrendingDown, Minus, 
-  CheckCircle2, ArrowRight, Activity, BookOpen,
-  Loader2, ArrowUpRight, X, DollarSign, Home
+  Users, AlertTriangle, Globe, Brain, Flag, TrendingUp, TrendingDown, Minus, 
+  CheckCircle2, ArrowRight,
+  Loader2, X
 } from 'lucide-react';
 import { 
   ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, Tooltip, Sector
@@ -98,7 +98,6 @@ const Overview: React.FC = () => {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTier, setActiveTier] = useState<string>('Critical');
-  const [selectedRadarDomain, setSelectedRadarDomain] = useState<string>('Neighborhood & Built Env');
   const [isDriversModalOpen, setIsDriversModalOpen] = useState<boolean>(false);
   const [activeFactorTab, setActiveFactorTab] = useState<string>('All');
 
@@ -106,7 +105,7 @@ const Overview: React.FC = () => {
     setIsLoading(true);
     setError(null);
     try {
-      const res = await fetch(`http://127.0.0.1:8000/api/overview/?t=${Date.now()}`);
+      const res = await fetch(`/api/overview/?t=${Date.now()}`);
       if (!res.ok) {
         throw new Error(`Failed to load overview data (${res.status})`);
       }
@@ -123,23 +122,6 @@ const Overview: React.FC = () => {
       }
     } catch (err: any) {
       console.error('Error fetching overview data:', err);
-      // Fallback relative path
-      try {
-        const resFallback = await fetch(`/api/overview/?t=${Date.now()}`);
-        if (resFallback.ok) {
-          const json: OverviewApiResponse = await resFallback.json();
-          setData(json);
-          if (json.risk_distribution && json.risk_distribution.length > 0) {
-            const firstNonEmpty = json.risk_distribution.find(t => t.value > 0);
-            if (firstNonEmpty) {
-              setActiveTier(firstNonEmpty.name);
-            } else {
-              setActiveTier(json.risk_distribution[0].name);
-            }
-          }
-          return;
-        }
-      } catch {}
       setError(err.message || 'Unable to connect to backend server');
     } finally {
       setIsLoading(false);
@@ -191,31 +173,6 @@ const Overview: React.FC = () => {
     if (!data || !data.risk_distribution) return 0;
     return data.risk_distribution.findIndex(t => t.name === activeTier);
   }, [data, activeTier]);
-
-  // Dynamic Radar Chart calculations
-  const radarData = useMemo(() => {
-    if (!data || !data.social_drivers) return [];
-    const pov = data.social_drivers.find(d => d.name.includes("Poverty"))?.percentage || 31;
-    const house = data.social_drivers.find(d => d.name.includes("Housing"))?.percentage || 57;
-    const food = data.social_drivers.find(d => d.name.includes("Food"))?.percentage || 78;
-    const veh = data.social_drivers.find(d => d.name.includes("Transportation"))?.percentage || 17;
-    const edu = data.social_drivers.find(d => d.name.includes("Education"))?.percentage || 99;
-    const unins = data.social_drivers.find(d => d.name.includes("Healthcare"))?.percentage || 22;
-
-    return [
-      { subject: "Economic Stability", score: pov, fullMark: 100, icon: DollarSign, color: "text-amber-500", bg: "bg-amber-50", barColor: "bg-amber-500", label: "Moderate Risk", concern: "High poverty index triggering trade-offs between essential clinical care vs groceries or home utility bills.", action: "Refer patient to local copay relief cards, state utility assistance, and community food bank drop-offs." },
-      { subject: "Neighborhood & Built Env", score: Math.round((house + food + veh) / 3), fullMark: 100, icon: Home, color: "text-error", bg: "bg-error/10", barColor: "bg-error", label: "High Risk", concern: "Elevated census tract housing burdens combined with low physical vehicle ownership or food desert proximity.", action: "Coordinate non-emergency medical shuttle vans and setup prescription home delivery support." },
-      { subject: "Education Deficits", score: edu, fullMark: 100, icon: BookOpen, color: "text-error", bg: "bg-error/10", barColor: "bg-error", label: "High Risk", concern: "Limited high school completion rates indicating low health literacy barriers and difficulties following care guidelines.", action: "Ensure clinical materials use plain language, include visual guides, and apply strict teach-back checks." },
-      { subject: "Social & Community Context", score: Math.round((pov + house) / 2), fullMark: 100, icon: Users, color: "text-primary", bg: "bg-primary/10", barColor: "bg-primary", label: "Moderate Risk", concern: "Broad social vulnerability index triggers coupled with isolated living arrangements.", action: "Connect patient to certified community health workers and schedule regular digital/telephone check-ins." },
-      { subject: "Health Care Access", score: unins, fullMark: 100, icon: Activity, color: "text-secondary", bg: "bg-secondary/10", barColor: "bg-secondary", label: "Low Risk", concern: "High local uninsured rates causing patients to delay diagnostic tests or standard preventive screenings.", action: "Initiate outreach from financial counselors to evaluate Medicaid, ACA, or charity program eligibility." }
-    ];
-  }, [data]);
-
-  // Selected Radar Domain details
-  const activeRadarDetail = useMemo(() => {
-    if (radarData.length === 0) return null;
-    return radarData.find(r => r.subject === selectedRadarDomain) || radarData[0];
-  }, [radarData, selectedRadarDomain]);
 
   // Custom active sector slice drawer for glowing/highlight effect
   const renderActiveShape = (props: any) => {
@@ -274,7 +231,23 @@ const Overview: React.FC = () => {
     );
   }
 
-  const { summary_cards, risk_synthesis, risk_distribution } = data;
+  const { summary_cards, risk_distribution } = data;
+
+  const totalPatients = risk_distribution.reduce((acc, curr) => acc + curr.value, 0);
+
+  const housingPct = data.social_drivers.find(d => d.name.includes("Housing"))?.percentage || 57;
+  const housingCount = Math.round((totalPatients * housingPct) / 100);
+
+  const foodPct = data.social_drivers.find(d => d.name.includes("Food"))?.percentage || 78;
+  const foodCount = Math.round((totalPatients * foodPct) / 100);
+
+  const povertyPct = data.social_drivers.find(d => d.name.includes("Poverty"))?.percentage || 31;
+  const povertyCount = Math.round((totalPatients * povertyPct) / 100);
+
+  const uninsuredPct = data.social_drivers.find(d => d.name.includes("Healthcare"))?.percentage || 22;
+  const uninsuredCount = Math.round((totalPatients * uninsuredPct) / 100);
+
+
 
   return (
     <div className="flex flex-col gap-8 w-full">
@@ -314,10 +287,10 @@ const Overview: React.FC = () => {
       </section>
 
       {/* Main Row Grid */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
+      <div className="w-full">
         
         {/* LEFT/MID: Cohort Risk & Care Priority (Donut + Details Card) */}
-        <section className="glass-card p-6 sm:p-8 xl:col-span-2 flex flex-col relative overflow-hidden min-h-[520px]">
+        <section className="glass-card p-6 sm:p-8 flex flex-col relative overflow-hidden min-h-[520px]">
           <div className="flex justify-between items-center mb-6 shrink-0 z-10">
             <div>
               <h2 className="text-lg font-bold text-on-surface">Cohort Risk & Care Priority</h2>
@@ -495,135 +468,130 @@ const Overview: React.FC = () => {
           </div>
         </section>
 
-        {/* RIGHT: SDOH Domain Impact Board (Clean progress cards) */}
-        <section className="glass-card p-6 sm:p-8 flex flex-col justify-between relative overflow-hidden min-h-[520px]">
-          <div className="flex justify-between items-center mb-4 shrink-0">
-            <div>
-              <h2 className="text-lg font-bold text-on-surface">SDOH Domain Impact Board</h2>
-              <p className="text-[12px] text-on-surface-variant">Prevalence across standard WHO/HealthyPeople domains</p>
-            </div>
-            <span className="bg-primary/5 text-primary border border-primary/20 text-[10px] font-bold px-2.5 py-0.5 rounded-full shadow-sm">Interactive Grid</span>
-          </div>
-
-          {/* Interactive domain items list */}
-          <div className="flex flex-col gap-3 flex-1 justify-center my-2">
-            {radarData.map((domain, index) => {
-              const IconComp = domain.icon;
-              const isSelected = domain.subject === selectedRadarDomain;
-              return (
-                <button
-                  key={index}
-                  onClick={() => setSelectedRadarDomain(domain.subject)}
-                  className={`w-full text-left p-3 rounded-2xl border transition-all flex flex-col gap-1.5 cursor-pointer ${
-                    isSelected 
-                      ? 'bg-white shadow-md border-primary/20 scale-[1.01]' 
-                      : 'bg-white/40 border-slate-100/50 hover:bg-white/70'
-                  }`}
-                >
-                  <div className="flex justify-between items-center">
-                    <div className="flex items-center gap-2">
-                      <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${domain.bg} ${domain.color}`}>
-                        <IconComp className="w-4 h-4" />
-                      </div>
-                      <span className="text-[12px] font-bold text-slate-800">{domain.subject}</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className={`text-[9px] font-extrabold px-2 py-0.5 rounded border ${
-                        domain.label.includes('High') 
-                          ? 'bg-red-50 text-red-700 border-red-100' 
-                          : (domain.label.includes('Moderate') ? 'bg-amber-50 text-amber-700 border-amber-100' : 'bg-green-50 text-green-700 border-green-100')
-                      }`}>
-                        {domain.label}
-                      </span>
-                      <span className="text-[12px] font-extrabold text-slate-800">{domain.score}%</span>
-                    </div>
-                  </div>
-                  <div className="h-1.5 w-full bg-slate-200/50 rounded-full overflow-hidden">
-                    <div className={`h-full ${domain.barColor} rounded-full`} style={{ width: `${domain.score}%` }}></div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Dynamic details overlay card */}
-          {activeRadarDetail ? (
-            <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl text-left my-2 flex-1 flex flex-col justify-between shadow-inner">
-              <div>
-                <div className="flex justify-between items-center mb-1">
-                  <span className="text-[10px] font-black uppercase text-primary tracking-wider">{activeRadarDetail.subject}</span>
-                  <span className="text-xs font-black text-slate-800 bg-white border border-slate-200 px-2 py-0.5 rounded shadow-sm">
-                    {activeRadarDetail.score}% Burden
-                  </span>
-                </div>
-                <p className="text-[11px] font-bold text-slate-700 leading-snug">
-                  <span className="text-slate-400 text-[9px] font-black uppercase block tracking-wide mt-1">Vulnerability Concern</span>
-                  {activeRadarDetail.concern}
-                </p>
-                <p className="text-[11px] font-semibold text-slate-600 mt-2 leading-snug">
-                  <span className="text-secondary text-[9px] font-black uppercase block tracking-wide">Suggested Care Intervention</span>
-                  {activeRadarDetail.action}
-                </p>
-              </div>
-            </div>
-          ) : null}
-
-          {/* View all drawer disclosure button */}
-          <div className="mt-4 pt-3 border-t border-slate-100 shrink-0 text-center flex justify-center">
-            <button
-              onClick={() => setIsDriversModalOpen(true)}
-              className="inline-flex items-center gap-1 text-xs font-bold text-primary bg-primary/5 hover:bg-primary/10 border border-primary/20 px-5 py-2.5 rounded-full transition-all cursor-pointer shadow-sm"
-            >
-              <span>View all 12 SDOH factors</span>
-              <ArrowUpRight className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </section>
       </div>
 
-      {/* RISK CONVERGENCE visualizer strip */}
-      <section className="glass-card p-5 sm:p-6 relative overflow-hidden flex flex-col items-center">
-        <div className="text-center mb-6 w-full">
-          <h2 className="text-base font-extrabold text-on-surface uppercase tracking-wider">Risk Convergence Strip</h2>
-          <p className="text-[12px] text-slate-500 mt-0.5">Visualizing how clinical acuity merges with community vulnerability to trigger care prioritizations</p>
+      {/* Member Care Pathways */}
+      <section className="glass-card p-6 sm:p-8 relative overflow-hidden flex flex-col">
+        <div className="flex justify-between items-center mb-6 shrink-0">
+          <div>
+            <h2 className="text-base font-extrabold text-on-surface uppercase tracking-wider">Member Care Pathways</h2>
+            <p className="text-[12px] text-slate-500 mt-0.5">Strategic care management referrals mapped to active population SDOH drivers</p>
+          </div>
+          <span className="bg-teal-50 text-teal-700 border border-teal-100 text-[10px] font-bold px-3 py-1 rounded-full shadow-sm">Operational Ready</span>
         </div>
 
-        <div className="w-full max-w-4xl flex flex-col md:flex-row items-center justify-between gap-4 md:gap-8 py-3 relative">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 w-full">
           
-          {/* Clinical Risk */}
-          <div className="glass-panel p-4 text-center w-full md:w-56 bg-white/60 border border-white shadow-sm flex flex-col items-center relative rounded-2xl">
-            <div className="text-[10px] font-bold text-primary uppercase tracking-wider mb-1 flex items-center gap-1">
-              <Activity className="w-3.5 h-3.5" /> Clinical Risk
+          {/* Card 1: Housing Stability */}
+          <div className="p-5 rounded-2xl border border-slate-100 bg-white shadow-sm flex flex-col justify-between hover:shadow-md transition-all">
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <span className="w-8 h-8 rounded-lg bg-red-50 text-red-600 flex items-center justify-center font-bold text-sm">🏠</span>
+                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wide">Housing Stability</h3>
+              </div>
+              <p className="text-[11px] text-slate-700 font-bold mb-1">{housingPct}% Prevalence ({housingCount} Members Affected)</p>
+              <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden mb-3">
+                <div className="h-full bg-red-500 rounded-full" style={{ width: `${housingPct}%` }}></div>
+              </div>
+              <ul className="space-y-1.5 text-[11px] text-slate-600 font-medium">
+                <li className="flex items-start gap-1.5">
+                  <span className="text-green-500">✓</span>
+                  <span>Connect with municipal housing agencies</span>
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <span className="text-green-500">✓</span>
+                  <span>Coordinate utility aid & grant programs</span>
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <span className="text-green-500">✓</span>
+                  <span>Rent assistance counseling referrals</span>
+                </li>
+              </ul>
             </div>
-            <div className="text-3xl font-extrabold text-primary">{risk_synthesis.clinical_risk_pct}%</div>
-            <p className="text-[10px] text-slate-500 font-bold mt-1 uppercase">Acuity & utilization</p>
-            <div className="hidden md:block absolute right-[-24px] top-1/2 -translate-y-1/2 text-slate-300 font-extrabold text-xl">▶</div>
           </div>
 
-          <div className="text-slate-300 text-2xl font-extrabold rotate-90 md:rotate-0">＋</div>
-
-          {/* Social Risk */}
-          <div className="glass-panel p-4 text-center w-full md:w-56 bg-white/60 border border-white shadow-sm flex flex-col items-center relative rounded-2xl">
-            <div className="text-[10px] font-bold text-tertiary uppercase tracking-wider mb-1 flex items-center gap-1">
-              <Globe className="w-3.5 h-3.5" /> Community SDOH
+          {/* Card 2: Food & Transport */}
+          <div className="p-5 rounded-2xl border border-slate-100 bg-white shadow-sm flex flex-col justify-between hover:shadow-md transition-all">
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <span className="w-8 h-8 rounded-lg bg-orange-50 text-orange-600 flex items-center justify-center font-bold text-sm">🍎</span>
+                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wide">Food & Transport</h3>
+              </div>
+              <p className="text-[11px] text-slate-700 font-bold mb-1">{foodPct}% Prevalence ({foodCount} Members Affected)</p>
+              <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden mb-3">
+                <div className="h-full bg-orange-500 rounded-full" style={{ width: `${foodPct}%` }}></div>
+              </div>
+              <ul className="space-y-1.5 text-[11px] text-slate-600 font-medium">
+                <li className="flex items-start gap-1.5">
+                  <span className="text-green-500">✓</span>
+                  <span>Enroll in SNAP & local nutrition assistance</span>
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <span className="text-green-500">✓</span>
+                  <span>Coordinate non-emergency shuttle van service</span>
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <span className="text-green-500">✓</span>
+                  <span>Partner food pantry home delivery</span>
+                </li>
+              </ul>
             </div>
-            <div className="text-3xl font-extrabold text-tertiary">{risk_synthesis.social_risk_pct}%</div>
-            <p className="text-[10px] text-slate-500 font-bold mt-1 uppercase">Vulnerability census tract</p>
-            <div className="hidden md:block absolute left-[-24px] top-1/2 -translate-y-1/2 text-slate-300 font-extrabold text-xl">◀</div>
           </div>
 
-          <div className="text-slate-300 text-2xl font-extrabold rotate-90 md:rotate-0">➔</div>
-
-          {/* Combined Risk */}
-          <div className="glass-panel p-4 text-center w-full md:w-64 bg-gradient-to-br from-white/95 to-primary/5 border border-primary/20 shadow-md flex flex-col items-center relative rounded-2xl">
-            <div className="absolute inset-0 bg-primary/2 rounded-2xl -z-10 animate-pulse"></div>
-            <div className="text-[10px] font-bold text-primary uppercase tracking-wider mb-1 flex items-center gap-1">
-              <Brain className="w-3.5 h-3.5" /> Combined Convergence Risk
+          {/* Card 3: Economic Stability */}
+          <div className="p-5 rounded-2xl border border-slate-100 bg-white shadow-sm flex flex-col justify-between hover:shadow-md transition-all">
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <span className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center font-bold text-sm">💵</span>
+                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wide">Economic Stability</h3>
+              </div>
+              <p className="text-[11px] text-slate-700 font-bold mb-1">{povertyPct}% Prevalence ({povertyCount} Members Affected)</p>
+              <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden mb-3">
+                <div className="h-full bg-amber-500 rounded-full" style={{ width: `${povertyPct}%` }}></div>
+              </div>
+              <ul className="space-y-1.5 text-[11px] text-slate-600 font-medium">
+                <li className="flex items-start gap-1.5">
+                  <span className="text-green-500">✓</span>
+                  <span>Coordinate federal utility subsidies (LIHEAP)</span>
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <span className="text-green-500">✓</span>
+                  <span>Referrals to local job assistance centers</span>
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <span className="text-green-500">✓</span>
+                  <span>Coordinate financial assistance counseling</span>
+                </li>
+              </ul>
             </div>
-            <div className="text-4xl font-black text-primary">{risk_synthesis.combined_risk_pct}%</div>
-            <span className="text-[11px] font-extrabold bg-primary/10 text-primary border border-primary/20 px-3 py-0.5 rounded-full mt-1.5 uppercase tracking-wide">
-              {risk_synthesis.combined_risk_pct >= 65 ? 'Critical Risk' : (risk_synthesis.combined_risk_pct >= 40 ? 'Moderate Risk' : 'Low Risk')}
-            </span>
+          </div>
+
+          {/* Card 4: Healthcare Access */}
+          <div className="p-5 rounded-2xl border border-slate-100 bg-white shadow-sm flex flex-col justify-between hover:shadow-md transition-all">
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <span className="w-8 h-8 rounded-lg bg-teal-50 text-teal-600 flex items-center justify-center font-bold text-sm">🏥</span>
+                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wide">Healthcare Access</h3>
+              </div>
+              <p className="text-[11px] text-slate-700 font-bold mb-1">{uninsuredPct}% Prevalence ({uninsuredCount} Members Affected)</p>
+              <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden mb-3">
+                <div className="h-full bg-teal-500 rounded-full" style={{ width: `${uninsuredPct}%` }}></div>
+              </div>
+              <ul className="space-y-1.5 text-[11px] text-slate-600 font-medium">
+                <li className="flex items-start gap-1.5">
+                  <span className="text-green-500">✓</span>
+                  <span>Medicaid/ACA enrollment assistance</span>
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <span className="text-green-500">✓</span>
+                  <span>Coordinate prescription co-pay cards</span>
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <span className="text-green-500">✓</span>
+                  <span>Charitable financial advisor consult</span>
+                </li>
+              </ul>
+            </div>
           </div>
 
         </div>
@@ -725,9 +693,6 @@ const Overview: React.FC = () => {
             <h2 className="text-lg font-bold text-on-surface">Impact of SDOH on Prioritization</h2>
             <p className="text-[12px] text-on-surface-variant">Evaluating additional high-risk members identified when combining community SDOH with clinical records</p>
           </div>
-          <button className="w-8 h-8 rounded-full bg-white/50 border border-slate-200/40 flex items-center justify-center text-primary hover:bg-white transition-colors shadow-sm shrink-0">
-            <Info className="w-4 h-4" />
-          </button>
         </div>
         <div className="flex flex-col md:flex-row items-center justify-center gap-6 md:gap-12 py-4 flex-1">
           <div className="glass-panel p-6 text-center w-full md:w-60 flex flex-col items-center shrink-0 bg-white/40">

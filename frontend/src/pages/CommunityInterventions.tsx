@@ -4,7 +4,6 @@ import {
   Loader2, 
   AlertOctagon, 
   AlertTriangle, 
-  CheckCircle, 
   MapPin, 
   Send, 
   History, 
@@ -88,8 +87,8 @@ const CommunityInterventions: React.FC = () => {
   // Search & Filters state
   const [searchQuery, setSearchQuery] = useState('');
   const [riskFilter, setRiskFilter] = useState('All');
-  const [domainFilter, setDomainFilter] = useState('All');
-  const [statusFilter, setStatusFilter] = useState('All');
+  const domainFilter: string = 'All';
+  const statusFilter: string = 'All';
 
   // Selected County drawer state
   const [selectedCountyFips, setSelectedCountyFips] = useState<string | null>(null);
@@ -126,20 +125,20 @@ const CommunityInterventions: React.FC = () => {
   const loadData = async () => {
     setIsLoading(true);
     try {
-      const countiesRes = await fetch('http://127.0.0.1:8000/api/community/counties/').catch(() => fetch('/api/community/counties/'));
+      const countiesRes = await fetch('/api/community/counties/');
       if (countiesRes.ok) {
         const data = await countiesRes.json();
         setCounties(data);
       }
 
-      const historyRes = await fetch('http://127.0.0.1:8000/api/community/notifications/').catch(() => fetch('/api/community/notifications/'));
+      const historyRes = await fetch('/api/community/notifications/');
       if (historyRes.ok) {
         const data = await historyRes.json();
         setHistoryList(data);
       }
     } catch (err) {
       console.error("Failed to load community interventions data", err);
-      setNotice({ type: 'error', msg: 'Backend API connection failed. Please ensure the Django server is running on port 8000.' });
+      setNotice({ type: 'error', msg: 'Backend API connection failed.' });
     } finally {
       setIsLoading(false);
     }
@@ -161,10 +160,10 @@ const CommunityInterventions: React.FC = () => {
       const fetchCountyDetails = async () => {
         setIsDetailLoading(true);
         try {
-          const detailRes = await fetch(`http://127.0.0.1:8000/api/community/counties/${selectedCountyFips}/`).catch(() => fetch(`/api/community/counties/${selectedCountyFips}/`));
-          const driversRes = await fetch(`http://127.0.0.1:8000/api/community/counties/${selectedCountyFips}/drivers/`).catch(() => fetch(`/api/community/counties/${selectedCountyFips}/drivers/`));
-          const intervRes = await fetch(`http://127.0.0.1:8000/api/community/counties/${selectedCountyFips}/interventions/`).catch(() => fetch(`/api/community/counties/${selectedCountyFips}/interventions/`));
-          const notifsRes = await fetch(`http://127.0.0.1:8000/api/community/notifications/?county_fips=${selectedCountyFips}`).catch(() => fetch(`/api/community/notifications/?county_fips=${selectedCountyFips}`));
+          const detailRes = await fetch(`/api/community/counties/${selectedCountyFips}/`);
+          const driversRes = await fetch(`/api/community/counties/${selectedCountyFips}/drivers/`);
+          const intervRes = await fetch(`/api/community/counties/${selectedCountyFips}/interventions/`);
+          const notifsRes = await fetch(`/api/community/notifications/?county_fips=${selectedCountyFips}`);
 
           if (detailRes.ok && driversRes.ok && intervRes.ok && notifsRes.ok) {
             const detailData = await detailRes.json();
@@ -187,15 +186,11 @@ const CommunityInterventions: React.FC = () => {
             
             if (!activeNotif && firstDomainName) {
               try {
-                const autoGenRes = await fetch('http://127.0.0.1:8000/api/community/interventions/generate/', {
+                const autoGenRes = await fetch('/api/community/interventions/generate/', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ county_fips: selectedCountyFips, domain: firstDomainName })
-                }).catch(() => fetch('/api/community/interventions/generate/', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ county_fips: selectedCountyFips, domain: firstDomainName })
-                }));
+                });
 
                 if (autoGenRes.ok) {
                   const autoGenData = await autoGenRes.json();
@@ -246,22 +241,18 @@ const CommunityInterventions: React.FC = () => {
     
     setIsDetailLoading(true);
     try {
-      const res = await fetch(`http://127.0.0.1:8000/api/community/notifications/?county_fips=${selectedCountyFips}&domain=${domainName}`).catch(() => fetch(`/api/community/notifications/?county_fips=${selectedCountyFips}&domain=${domainName}`));
+      const res = await fetch(`/api/community/notifications/?county_fips=${selectedCountyFips}&domain=${domainName}`);
       if (res.ok) {
         const notifs = await res.json();
         let activeNotif = notifs.find((n: any) => n.status !== 'RESOLVED' && n.status !== 'FAILED') || null;
         
         if (!activeNotif) {
           // Auto-generate under the hood!
-          const genRes = await fetch('http://127.0.0.1:8000/api/community/interventions/generate/', {
+          const genRes = await fetch('/api/community/interventions/generate/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ county_fips: selectedCountyFips, domain: domainName })
-          }).catch(() => fetch('/api/community/interventions/generate/', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ county_fips: selectedCountyFips, domain: domainName })
-          }));
+          });
 
           if (genRes.ok) {
             const genData = await genRes.json();
@@ -282,7 +273,7 @@ const CommunityInterventions: React.FC = () => {
     setIsActionLoading(true);
     const endpoint = simulate ? 'simulate' : 'send';
     try {
-      const res = await fetch(`http://127.0.0.1:8000/api/community/notifications/${notifId}/${endpoint}/`, {
+      const res = await fetch(`/api/community/notifications/${notifId}/${endpoint}/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -290,15 +281,7 @@ const CommunityInterventions: React.FC = () => {
           ai_email_body: activeNotification?.ai_email_body,
           recipient_email: activeNotification?.recipient_email
         })
-      }).catch(() => fetch(`/api/community/notifications/${notifId}/${endpoint}/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ai_email_subject: activeNotification?.ai_email_subject,
-          ai_email_body: activeNotification?.ai_email_body,
-          recipient_email: activeNotification?.recipient_email
-        })
-      }));
+      });
 
       if (res.ok) {
         const result = await res.json();
@@ -317,15 +300,11 @@ const CommunityInterventions: React.FC = () => {
   const handleUpdateStatus = async (notifId: string, newStatus: string) => {
     setIsActionLoading(true);
     try {
-      const res = await fetch(`http://127.0.0.1:8000/api/community/notifications/${notifId}/status/`, {
+      const res = await fetch(`/api/community/notifications/${notifId}/status/`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus })
-      }).catch(() => fetch(`/api/community/notifications/${notifId}/status/`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus })
-      }));
+      });
 
       if (res.ok) {
         const result = await res.json();
@@ -344,11 +323,9 @@ const CommunityInterventions: React.FC = () => {
   const handleGenerateAIEmail = async (notifId: string) => {
     setIsAiLoading(true);
     try {
-      const res = await fetch(`http://127.0.0.1:8000/api/community/notifications/${notifId}/generate-ai-email/`, {
+      const res = await fetch(`/api/community/notifications/${notifId}/generate-ai-email/`, {
         method: 'POST'
-      }).catch(() => fetch(`/api/community/notifications/${notifId}/generate-ai-email/`, {
-        method: 'POST'
-      }));
+      });
 
       if (res.ok) {
         const result = await res.json();
@@ -362,7 +339,7 @@ const CommunityInterventions: React.FC = () => {
       }
     } catch (err) {
       console.error(err);
-      setNotice({ type: 'error', msg: 'Failed to connect to OpenAI API endpoint.' });
+      setNotice({ type: 'error', msg: 'Error calling AI email auto-generation.' });
     } finally {
       setIsAiLoading(false);
     }
@@ -454,7 +431,7 @@ const CommunityInterventions: React.FC = () => {
       )}
 
       {/* KPI Cards Grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="glass-card p-4 flex flex-col justify-between border-t-4 border-t-slate-800">
           <span className="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider block">Total Counties</span>
           <div className="text-2xl font-black text-on-surface mt-2">{kpis.total}</div>
@@ -467,12 +444,6 @@ const CommunityInterventions: React.FC = () => {
           <div className="text-[10px] text-rose-600 font-bold mt-1 flex items-center gap-0.5"><AlertOctagon className="w-3 h-3" /> High/Critical Risk</div>
         </div>
 
-        <div className="glass-card p-4 flex flex-col justify-between border-t-4 border-t-orange-500">
-          <span className="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider block">Active Workflows</span>
-          <div className="text-2xl font-black text-orange-600 mt-2">{kpis.active}</div>
-          <div className="text-[10px] text-slate-500 font-semibold mt-1">Open notifications</div>
-        </div>
-
         <div className="glass-card p-4 flex flex-col justify-between border-t-4 border-t-amber-500">
           <span className="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider block">Pending Actions</span>
           <div className="text-2xl font-black text-amber-600 mt-2">{kpis.pending}</div>
@@ -483,12 +454,6 @@ const CommunityInterventions: React.FC = () => {
           <span className="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider block">Notifications Sent</span>
           <div className="text-2xl font-black text-blue-600 mt-2">{kpis.sent}</div>
           <div className="text-[10px] text-blue-600 font-bold mt-1">Live/Simulated sends</div>
-        </div>
-
-        <div className="glass-card p-4 flex flex-col justify-between border-t-4 border-t-emerald-500 bg-emerald-500/5">
-          <span className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider block">Resolved Cases</span>
-          <div className="text-2xl font-black text-emerald-700 mt-2">{kpis.resolved}</div>
-          <div className="text-[10px] text-emerald-700 font-bold mt-1 flex items-center gap-0.5"><CheckCircle className="w-3 h-3" /> Target achieved</div>
         </div>
       </div>
 
@@ -544,49 +509,7 @@ const CommunityInterventions: React.FC = () => {
               <option value="CRITICAL">Critical</option>
               <option value="HIGH">High</option>
             </select>
-          )}
-
-          <select 
-            value={domainFilter}
-            onChange={(e) => setDomainFilter(e.target.value)}
-            className="border border-slate-200 rounded-md px-3 py-1.5 bg-white text-xs font-semibold text-slate-600 focus:outline-none focus:border-primary min-w-[150px] cursor-pointer"
-          >
-            <option value="All">Domain: All</option>
-            <option value="Healthcare Access">Healthcare Access</option>
-            <option value="Social & Economic Services">Social & Economic Services</option>
-            <option value="Food & Nutrition">Food & Nutrition</option>
-            <option value="Transportation">Transportation</option>
-            <option value="Housing">Housing</option>
-          </select>
-
-          <select 
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="border border-slate-200 rounded-md px-3 py-1.5 bg-white text-xs font-semibold text-slate-600 focus:outline-none focus:border-primary min-w-[130px] cursor-pointer"
-          >
-            <option value="All">Status: All</option>
-            {activeTab === 'prioritization' ? (
-              <>
-                <option value="None">No Active alert</option>
-                <option value="PENDING">Pending Send</option>
-                <option value="SIMULATED">Simulated Send</option>
-                <option value="SENT">Sent Live</option>
-                <option value="ACKNOWLEDGED">Acknowledged</option>
-                <option value="IN_PROGRESS">In Progress</option>
-                <option value="RESOLVED">Resolved</option>
-              </>
-            ) : (
-              <>
-                <option value="PENDING">Pending</option>
-                <option value="SIMULATED">Simulated</option>
-                <option value="SENT">Sent</option>
-                <option value="ACKNOWLEDGED">Acknowledged</option>
-                <option value="IN_PROGRESS">In Progress</option>
-                <option value="RESOLVED">Resolved</option>
-                <option value="FAILED">Failed</option>
-              </>
-            )}
-          </select>
+           )}
         </div>
 
         {/* Content list block */}
@@ -607,14 +530,13 @@ const CommunityInterventions: React.FC = () => {
                   <th className="px-6 py-4">Top SDOH Driver</th>
                   <th className="px-6 py-4">Priority Intervention Domain</th>
                   <th className="px-6 py-4">Priority</th>
-                  <th className="px-6 py-4">Active Alert Status</th>
                   <th className="px-6 py-4 text-right">Action</th>
                 </tr>
               </thead>
               <tbody className="text-[13px] bg-white/20 divide-y divide-slate-100">
                 {filteredCounties.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="text-center py-20 text-slate-400 font-semibold">
+                    <td colSpan={7} className="text-center py-20 text-slate-400 font-semibold">
                       No counties found matching the active search query and filters.
                     </td>
                   </tr>
@@ -643,15 +565,7 @@ const CommunityInterventions: React.FC = () => {
                           {county.priority}
                         </span>
                       </td>
-                      <td className="px-6 py-4">
-                        {county.notification_status !== 'None' ? (
-                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${getStatusBadgeClass(county.notification_status)}`}>
-                            {county.notification_status}
-                          </span>
-                        ) : (
-                          <span className="text-[10px] text-slate-400 font-bold uppercase">No Active Alert</span>
-                        )}
-                      </td>
+
                       <td className="px-6 py-4 text-right">
                         <button
                           onClick={() => setSelectedCountyFips(county.county_fips)}
@@ -1082,7 +996,7 @@ const CommunityInterventions: React.FC = () => {
                                 {/* Resolved status state info card */}
                                 {activeNotification.status === 'RESOLVED' && (
                                   <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl text-xs font-semibold flex items-center gap-2">
-                                    <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0" />
+                                    <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
                                     <div>
                                       <p className="font-extrabold text-emerald-900">Intervention Case Resolved</p>
                                       <p className="text-[10px] text-emerald-700 font-medium mt-0.5">

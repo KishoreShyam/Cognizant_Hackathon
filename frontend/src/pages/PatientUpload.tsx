@@ -86,9 +86,7 @@ const PatientUpload: React.FC = () => {
   // Load all members to filter by uploaded ones
   const fetchAllMembers = async () => {
     try {
-      const response = await fetch(`/api/members/?t=${Date.now()}`).catch(() => 
-        fetch(`http://127.0.0.1:8000/api/members/?t=${Date.now()}`)
-      );
+      const response = await fetch(`/api/members/?t=${Date.now()}`);
       if (response.ok) {
         const data = await response.json();
         const memberList = data.members || [];
@@ -123,12 +121,7 @@ const PatientUpload: React.FC = () => {
       const response = await fetch('/api/current-patients/upload/', {
         method: 'POST',
         body: formData,
-      }).catch(() => 
-        fetch('http://127.0.0.1:8000/api/current-patients/upload/', {
-          method: 'POST',
-          body: formData,
-        })
-      );
+      });
 
       const resData = await response.json();
       if (!response.ok) {
