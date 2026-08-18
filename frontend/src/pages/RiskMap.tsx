@@ -8,23 +8,10 @@ import {
   Users,
   RefreshCw,
   Loader2,
-  Sparkles,
-  DollarSign,
-  Home,
-  ShoppingBag,
-  Car,
-  Wifi,
-  GraduationCap,
-  Activity,
-  Stethoscope,
-  Pill,
-  ShieldAlert,
   TrendingUp,
   CheckCircle2,
   X,
   Info,
-  Heart,
-  BarChart2,
 } from 'lucide-react';
 
 interface DriverItem {
@@ -124,24 +111,7 @@ const MapRecenter: React.FC<{ lat: number; lng: number; zoom?: number }> = ({ la
   return null;
 };
 
-// Helper for factor icons
-const getFeatureIcon = (featureKey: string, category: 'Clinical' | 'SDOH') => {
-  const k = featureKey.toLowerCase();
-  if (k.includes('poverty') || k.includes('unemploy')) return <DollarSign className="w-3.5 h-3.5 text-rose-500" />;
-  if (k.includes('income')) return <DollarSign className="w-3.5 h-3.5 text-amber-600" />;
-  if (k.includes('housing')) return <Home className="w-3.5 h-3.5 text-rose-500" />;
-  if (k.includes('food')) return <ShoppingBag className="w-3.5 h-3.5 text-orange-500" />;
-  if (k.includes('vehicle') || k.includes('transport')) return <Car className="w-3.5 h-3.5 text-blue-500" />;
-  if (k.includes('broadband') || k.includes('digital')) return <Wifi className="w-3.5 h-3.5 text-indigo-500" />;
-  if (k.includes('education')) return <GraduationCap className="w-3.5 h-3.5 text-amber-600" />;
-  if (k.includes('emergency') || k.includes('ed_visit')) return <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />;
-  if (k.includes('medication') || k.includes('adherence')) return <Pill className="w-3.5 h-3.5 text-purple-500" />;
-  if (k.includes('hba1c') || k.includes('blood') || k.includes('bp')) return <Heart className="w-3.5 h-3.5 text-rose-500" />;
-  if (k.includes('hospitalization') || k.includes('inpatient')) return <Activity className="w-3.5 h-3.5 text-rose-600" />;
-  if (k.includes('procedure') || k.includes('condition') || k.includes('burden') || k.includes('utilization')) return <BarChart2 className="w-3.5 h-3.5 text-blue-500" />;
-  if (category === 'Clinical') return <Stethoscope className="w-3.5 h-3.5 text-blue-500" />;
-  return <Sparkles className="w-3.5 h-3.5 text-slate-400" />;
-};
+
 
 const statusBadgeStyle = (status: string) => {
   if (status === 'Critical') return 'bg-red-100 text-red-700 border-red-200';
@@ -160,6 +130,7 @@ const RiskMap: React.FC = () => {
   const [viewMode, setViewMode] = useState<'county' | 'tract'>('county');
   const [activeCountyTab, setActiveCountyTab] = useState<'overview' | 'sdoh' | 'clinical' | 'interventions'>('overview');
   const [statusFilter, setStatusFilter] = useState<string>('All');
+
 
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -235,46 +206,7 @@ const RiskMap: React.FC = () => {
   const top5SdohDrivers = useMemo(() => (selectedRegion?.sdoh_drivers || []).slice(0, 5), [selectedRegion]);
   const top5ClinicalDrivers = useMemo(() => (selectedRegion?.clinical_drivers || []).slice(0, 5), [selectedRegion]);
 
-  // Driver table row renderer
-  const DriverRow = ({ driver, idx }: { driver: DriverItem; idx: number }) => {
-    const barPct = Math.min(100, Math.max(8, Math.abs(driver.mean_shap) * 350));
-    const isPositive = driver.mean_shap >= 0;
-    return (
-      <tr key={idx} className="border-b border-slate-100 hover:bg-slate-50/60 transition-colors">
-        <td className="py-2.5 pr-3">
-          <div className="flex items-center gap-2">
-            <span className="w-6 h-6 rounded-md bg-slate-100 flex items-center justify-center shrink-0">
-              {getFeatureIcon(driver.feature, driver.category)}
-            </span>
-            <span className="text-[12px] font-semibold text-slate-800 leading-tight">{driver.display_name}</span>
-          </div>
-        </td>
-        <td className="py-2.5 px-3 text-[12px] font-medium text-slate-600 whitespace-nowrap">
-          {driver.affected_display}
-        </td>
-        <td className="py-2.5 px-3 text-[12px] font-semibold text-slate-700 whitespace-nowrap">
-          {driver.average_value}
-        </td>
-        <td className="py-2.5 pl-3">
-          <div className="flex flex-col items-end gap-1">
-            <span className={`text-[12px] font-bold font-mono ${isPositive ? 'text-rose-600' : 'text-teal-700'}`}>
-              {driver.shap_formatted}
-            </span>
-            <div className="w-20 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-all duration-500 ${
-                  isPositive
-                    ? barPct > 60 ? 'bg-rose-600' : barPct > 35 ? 'bg-orange-500' : 'bg-amber-400'
-                    : 'bg-teal-500'
-                }`}
-                style={{ width: `${barPct}%` }}
-              />
-            </div>
-          </div>
-        </td>
-      </tr>
-    );
-  };
+
 
   const tabs = [
     { key: 'overview', label: 'Risk Overview' },
@@ -306,7 +238,7 @@ const RiskMap: React.FC = () => {
             <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
             <span>{error}</span>
           </div>
-          <button onClick={fetchMapData} className="font-bold underline cursor-pointer">Retry</button>
+          <button onClick={() => fetchMapData(false)} className="font-bold underline cursor-pointer">Retry</button>
         </div>
       )}
 
@@ -592,6 +524,26 @@ const RiskMap: React.FC = () => {
                         <span className="text-[9px] font-bold text-blue-600 uppercase leading-tight">Avg. Future Risk</span>
                       </div>
                     </div>
+                    {/* Community Intervention Action Card */}
+                    {viewMode === 'county' && (
+                      <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-xl space-y-2">
+                        <div className="flex justify-between items-center">
+                          <span className="text-[10px] font-bold text-indigo-700 uppercase tracking-wider">Intervention Status</span>
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-black bg-indigo-100 text-indigo-700 uppercase">
+                            Operational
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-indigo-950 font-medium leading-relaxed">
+                          Monitor SDOH drivers and coordinate municipal alerts for this county.
+                        </p>
+                        <button
+                          onClick={() => navigate('/community-interventions')}
+                          className="w-full py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg cursor-pointer flex items-center justify-center gap-1 shadow-sm transition-all"
+                        >
+                          Launch Interventions Hub <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
 

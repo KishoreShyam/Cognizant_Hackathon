@@ -1,15 +1,44 @@
+import { useEffect, useState } from 'react';
+import { onAuthStateChanged } from 'firebase/auth';
+import type { User } from 'firebase/auth';
+import { auth } from './firebase';
+import Login from './pages/Login';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import Overview from './pages/Overview';
 import Members from './pages/Members';
-import ClinicalRisk from './pages/ClinicalRisk';
 import RiskMap from './pages/RiskMap';
 import SDOHAnalysis from './pages/SDOHAnalysis';
 import Interventions from './pages/Interventions';
 import AIAssistant from './pages/AIAssistant';
+import CommunityInterventions from './pages/CommunityInterventions';
 
 function App() {
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setAuthLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center gap-3">
+        <div className="w-10 h-10 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+        <p className="text-xs font-black uppercase tracking-wider text-slate-400">Verifying secure credentials...</p>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Login />;
+  }
+
   return (
     <Router>
       <div className="min-h-screen text-on-surface antialiased flex bg-slate-100/40">
@@ -47,20 +76,7 @@ function App() {
                 </>
               } 
             />
-            <Route 
-              path="/clinical" 
-              element={
-                <>
-                  <Header 
-                    title="Clinical Risk Analytics" 
-                    subtitle="Evaluate clinical cohorts and individual condition drivers" 
-                  />
-                  <main className="p-4 md:p-8 flex flex-col gap-8 w-full flex-1">
-                    <ClinicalRisk />
-                  </main>
-                </>
-              } 
-            />
+
             <Route 
               path="/map" 
               element={
@@ -99,6 +115,20 @@ function App() {
                   />
                   <main className="p-4 md:p-8 flex flex-col gap-8 w-full flex-1">
                     <Interventions />
+                  </main>
+                </>
+              } 
+            />
+            <Route 
+              path="/community-interventions" 
+              element={
+                <>
+                  <Header 
+                    title="Community Intervention Prioritization" 
+                    subtitle="Simulate and track county-level SDOH intervention outreach alerts" 
+                  />
+                  <main className="p-4 md:p-8 flex flex-col gap-8 w-full flex-1">
+                    <CommunityInterventions />
                   </main>
                 </>
               } 

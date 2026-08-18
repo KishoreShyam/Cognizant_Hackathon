@@ -240,10 +240,10 @@ class SDOHPredictionEngine:
 
     def _load_models(self):
         """Loads the validated CatBoost 3-class future risk model and metadata."""
-        model_3_path = self.ml_dir / 'sdoh_catboost_future_risk_model.cbm'
-        features_json_path = self.ml_dir / 'model_features.json'
-        model_5_path = self.ml_dir / 'best_sdoh_risk_model.pkl'
-        preprocessor_path = self.ml_dir / 'sdoh_preprocessor.pkl'
+        model_3_path = self.ml_dir / 'future prediction' / 'sdoh_catboost_future_risk_model.cbm'
+        features_json_path = self.ml_dir / 'future prediction' / 'model_features.json'
+        model_5_path = self.ml_dir / 'future prediction' / 'best_sdoh_risk_model.pkl'
+        preprocessor_path = self.ml_dir / 'future prediction' / 'sdoh_preprocessor.pkl'
 
         if not model_3_path.exists():
             raise FileNotFoundError(f"Future risk CatBoost model not found at {model_3_path}")

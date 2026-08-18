@@ -463,3 +463,254 @@ class PatientRiskPrediction(models.Model):
     def __str__(self):
         return f"Prediction for {self.patient.patient_id} - Future (5-Class): {self.current_risk_level}, Future (3-Class): {self.future_risk_level}"
 
+
+class CurrentPatient(models.Model):
+    """
+    Represents an individual patient from the current data workflow.
+    """
+    PATIENT_ID = models.CharField(
+        max_length=64,
+        primary_key=True,
+        unique=True,
+        db_index=True,
+        help_text="Unique patient identifier"
+    )
+    PATIENT_NAME = models.CharField(max_length=150, blank=True, default="")
+    FIPS_ID = models.CharField(max_length=11, db_index=True, help_text="11-digit Census Tract FIPS code")
+    STATE_NAME = models.CharField(max_length=100, blank=True, default="")
+    AGE = models.IntegerField(null=True, blank=True)
+    GENDER = models.CharField(max_length=20, blank=True, default="")
+    CHRONIC_CONDITIONS = models.IntegerField(null=True, blank=True)
+    CONDITIONS = models.IntegerField(null=True, blank=True)
+    INPATIENT_ADMISSIONS = models.IntegerField(null=True, blank=True)
+    EMERGENCY_VISITS = models.IntegerField(null=True, blank=True)
+    OUTPATIENT_VISITS = models.IntegerField(null=True, blank=True)
+    MEDICATIONS = models.IntegerField(null=True, blank=True)
+    PROCEDURES = models.IntegerField(null=True, blank=True)
+    MEDICATIONS_PER_ENCOUNTER = models.FloatField(null=True, blank=True)
+    CONDITIONS_PER_ENCOUNTER = models.FloatField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'current_patient'
+        verbose_name = 'Current Patient'
+        verbose_name_plural = 'Current Patients'
+        ordering = ['PATIENT_ID']
+        indexes = [
+            models.Index(fields=['PATIENT_ID']),
+            models.Index(fields=['FIPS_ID']),
+        ]
+
+    def __str__(self):
+        return f"CurrentPatient {self.PATIENT_ID} (Tract: {self.FIPS_ID})"
+
+
+class CurrentCommunity(models.Model):
+    """
+    Represents a California census tract and its community SDOH features for the current data workflow.
+    """
+    state_abbreviation = models.CharField(max_length=10, blank=True, default="")
+    state_county_fips = models.CharField(max_length=10, db_index=True)
+    county_name = models.CharField(max_length=100, blank=True, default="")
+    tract_fips = models.CharField(
+        max_length=11,
+        primary_key=True,
+        unique=True,
+        db_index=True,
+        help_text="11-digit zero-padded Census Tract FIPS code"
+    )
+    tract_id = models.CharField(max_length=20, db_index=True)
+    social_vulnerability_index = models.FloatField(null=True, blank=True)
+    poverty_rate = models.FloatField(null=True, blank=True)
+    median_household_income = models.FloatField(null=True, blank=True)
+    uninsured_rate = models.FloatField(null=True, blank=True)
+    housing_cost_burden = models.FloatField(null=True, blank=True)
+    no_vehicle_rate = models.FloatField(null=True, blank=True)
+    low_access_households_no_vehicle = models.FloatField(null=True, blank=True)
+    low_access_population_rate = models.FloatField(null=True, blank=True)
+    disability_rate = models.FloatField(null=True, blank=True)
+    unemployment_rate = models.FloatField(null=True, blank=True)
+    no_internet_access_rate = models.FloatField(null=True, blank=True)
+    limited_english_rate = models.FloatField(null=True, blank=True)
+
+    # Derived risk columns for Current workflow
+    normalized_values = models.JSONField(null=True, blank=True, help_text="Preserves normalized SDOH values")
+    risk_oriented_values = models.JSONField(null=True, blank=True, help_text="Preserves risk-direction-transformed SDOH values")
+    feature_contribution_percentages = models.JSONField(null=True, blank=True, help_text="Preserves SDOH feature contribution percentages")
+    community_risk_score = models.FloatField(null=True, blank=True, help_text="Community Risk Score (0-100 continuous)")
+    community_risk_level = models.CharField(max_length=20, null=True, blank=True, help_text="Community Risk Category (e.g. LOW, MEDIUM, etc.)")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'current_community'
+        verbose_name = 'Current Community'
+        verbose_name_plural = 'Current Community Records'
+        ordering = ['tract_fips']
+        indexes = [
+            models.Index(fields=['tract_fips']),
+            models.Index(fields=['tract_id']),
+            models.Index(fields=['state_county_fips']),
+        ]
+
+    def __str__(self):
+        county_str = f" ({self.county_name})" if self.county_name else ""
+        return f"Current Tract {self.tract_fips}{county_str}"
+
+
+class CurrentPatientPrediction(models.Model):
+    """
+    Stores current (XGBoost based) risk predictions for a current patient.
+    """
+    patient = models.ForeignKey(
+        CurrentPatient,
+        on_delete=models.CASCADE,
+        related_name='predictions',
+        help_text="Associated current patient record"
+    )
+    tract_fips = models.CharField(
+        max_length=11,
+        db_index=True,
+        help_text="Patient Census Tract FIPS"
+    )
+    prediction_timestamp = models.DateTimeField(
+        auto_now_add=True,
+        help_text="Timestamp when the prediction was evaluated"
+    )
+
+    # Clinical risk metrics
+    clinical_risk_score = models.FloatField(help_text="Continuous Clinical Risk Score (0-100)")
+    clinical_risk_level = models.CharField(max_length=20, help_text="Predicted clinical risk level (e.g. LOW)")
+    clinical_probability_very_low = models.FloatField()
+    clinical_probability_low = models.FloatField()
+    clinical_probability_medium = models.FloatField()
+    clinical_probability_high = models.FloatField()
+    clinical_probability_very_high = models.FloatField()
+
+    # Community risk metrics
+    community_risk_score = models.FloatField(help_text="Continuous Community Risk Score (0-100)")
+    community_risk_level = models.CharField(max_length=20, help_text="Predicted community risk level (e.g. MEDIUM)")
+
+    # Final combined metrics (50/50 combined)
+    final_current_risk_score = models.FloatField(help_text="Combined Current Risk Score (0-100)")
+    final_current_risk_level = models.CharField(max_length=20, help_text="Combined risk category (e.g. HIGH)")
+
+    # Model info
+    model_version = models.CharField(max_length=50, default='xgboost_v1')
+
+    # Raw / Normalized / Contribution data
+    raw_sdoh_values = models.JSONField(help_text="Original raw community feature values")
+    normalized_sdoh_values = models.JSONField(help_text="Normalized community feature values")
+    risk_oriented_sdoh_values = models.JSONField(help_text="Risk-direction-transformed community values")
+    sdoh_feature_contribution_percentages = models.JSONField(help_text="Prevalence contribution percentages")
+    clinical_shap_drivers = models.JSONField(null=True, blank=True, help_text="Clinical feature SHAP drivers list")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'current_patient_prediction'
+        verbose_name = 'Current Patient Risk Prediction'
+        verbose_name_plural = 'Current Patient Risk Predictions'
+        ordering = ['-prediction_timestamp']
+        indexes = [
+            models.Index(fields=['patient']),
+            models.Index(fields=['tract_fips']),
+            models.Index(fields=['prediction_timestamp']),
+        ]
+
+    def __str__(self):
+        return f"Current Prediction for {self.patient.PATIENT_ID} - Score: {self.final_current_risk_score:.2f} ({self.final_current_risk_level})"
+
+
+class InterventionContact(models.Model):
+    state = models.CharField(max_length=50)
+    state_fips = models.CharField(max_length=10)
+    county_fips = models.CharField(max_length=10, db_index=True)
+    county_name = models.CharField(max_length=100)
+    municipality = models.CharField(max_length=100)
+    domain = models.CharField(max_length=100, db_index=True)
+    contact_role = models.CharField(max_length=200)
+    contact_email = models.CharField(max_length=255)
+    email_type = models.CharField(max_length=50)
+    notification_enabled = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'intervention_contact'
+        unique_together = ('county_fips', 'domain')
+
+    def __str__(self):
+        return f"{self.county_name} - {self.domain} Contact ({self.municipality})"
+
+
+class CommunityInterventionNotification(models.Model):
+    notification_id = models.CharField(max_length=64, unique=True, db_index=True, primary_key=True)
+    county_fips = models.CharField(max_length=10, db_index=True)
+    county_name = models.CharField(max_length=100)
+    municipality = models.CharField(max_length=100)
+    risk_score = models.FloatField()
+    risk_level = models.CharField(max_length=50)
+    primary_driver = models.CharField(max_length=255)
+    primary_driver_shap = models.FloatField()
+    domain = models.CharField(max_length=100, db_index=True)
+    priority = models.CharField(max_length=50)
+    intervention = models.TextField()
+    reason = models.TextField()
+    recipient_email = models.CharField(max_length=255)
+    email_type = models.CharField(max_length=50)
+    status = models.CharField(
+        max_length=50,
+        choices=[
+            ('PENDING', 'PENDING'),
+            ('SIMULATED', 'SIMULATED'),
+            ('SENT', 'SENT'),
+            ('ACKNOWLEDGED', 'ACKNOWLEDGED'),
+            ('IN_PROGRESS', 'IN_PROGRESS'),
+            ('RESOLVED', 'RESOLVED'),
+            ('FAILED', 'FAILED')
+        ],
+        default='PENDING',
+        db_index=True
+    )
+    ai_email_subject = models.TextField(null=True, blank=True)
+    ai_email_body = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    acknowledged_at = models.DateTimeField(null=True, blank=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'community_intervention_notification'
+
+    def __str__(self):
+        return f"{self.county_name} - {self.domain} ({self.status})"
+
+
+class Staff(models.Model):
+    firebase_uid = models.CharField(max_length=128, unique=True, db_index=True)
+    name = models.CharField(max_length=255)
+    email = models.EmailField(unique=True)
+    role = models.CharField(
+        max_length=50,
+        choices=[
+            ('admin', 'admin'),
+            ('claims_officer', 'claims_officer'),
+            ('underwriter', 'underwriter')
+        ],
+        default='underwriter'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'staff'
+
+    def __str__(self):
+        return f"{self.name} ({self.role})"
+
+
+
+

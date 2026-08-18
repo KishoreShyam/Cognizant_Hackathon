@@ -14,7 +14,7 @@ import {
   X,
   Loader2
 } from 'lucide-react';
-import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
+
 
 interface ClinicalCohortMember {
   id: string;

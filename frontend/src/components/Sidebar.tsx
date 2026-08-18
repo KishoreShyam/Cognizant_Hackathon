@@ -3,23 +3,25 @@ import { NavLink } from 'react-router-dom';
 import { 
   LayoutDashboard, 
   Users, 
-  Activity, 
   Map, 
   BarChart3,
   CheckSquare, 
   Settings, 
   HelpCircle,
-  ShieldAlert
+  ShieldAlert,
+  LogOut
 } from 'lucide-react';
+import { signOut } from 'firebase/auth';
+import { auth } from '../firebase';
 
 const Sidebar: React.FC = () => {
   const navItems = [
     { path: '/', label: 'Overview', icon: LayoutDashboard },
     { path: '/members', label: 'Members', icon: Users },
-    { path: '/clinical', label: 'Clinical Risk', icon: Activity },
     { path: '/map', label: 'Risk Map', icon: Map },
     { path: '/sdoh-analysis', label: 'SDOH Analysis', icon: BarChart3 },
     { path: '/interventions', label: 'Priority & Interventions', icon: CheckSquare },
+    { path: '/community-interventions', label: 'Community Interventions', icon: ShieldAlert },
   ];
 
   return (
@@ -69,6 +71,13 @@ const Sidebar: React.FC = () => {
             <HelpCircle className="w-5 h-5 shrink-0" />
             <span>Support</span>
           </a>
+          <button 
+            onClick={() => signOut(auth)}
+            className="w-full flex items-center gap-3 px-4 py-3 text-red-600 hover:bg-red-50 transition-colors rounded-xl font-medium text-[14px] cursor-pointer text-left"
+          >
+            <LogOut className="w-5 h-5 shrink-0" />
+            <span>Sign Out</span>
+          </button>
         </div>
       </div>
     </nav>

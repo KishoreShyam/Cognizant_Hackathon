@@ -232,41 +232,49 @@ const Members: React.FC = () => {
 
   // Helper for rendering risk badges
   const getRiskBadge = (level: string, confidencePct?: string) => {
-    switch (level) {
-      case 'Critical':
+    const lvl = (level || '').toLowerCase().trim();
+    switch (lvl) {
+      case 'critical':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-error/10 text-error border border-error/20">
             <span className="w-1.5 h-1.5 rounded-full bg-error animate-pulse"></span>
-            Critical {confidencePct && <span className="opacity-80 font-normal">({confidencePct})</span>}
+            Critical {confidencePct && <span className="opacity-80 font-normal font-mono">({confidencePct})</span>}
           </span>
         );
-      case 'High':
+      case 'very high':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
             <span className="w-1.5 h-1.5 rounded-full bg-rose-600"></span>
-            High {confidencePct && <span className="opacity-80 font-normal">({confidencePct})</span>}
+            Very High {confidencePct && <span className="opacity-80 font-normal font-mono">({confidencePct})</span>}
           </span>
         );
-      case 'Moderate':
-      case 'Medium':
+      case 'high':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-orange-100 text-orange-800 border border-orange-200">
+            <span className="w-1.5 h-1.5 rounded-full bg-orange-600"></span>
+            High {confidencePct && <span className="opacity-80 font-normal font-mono">({confidencePct})</span>}
+          </span>
+        );
+      case 'moderate':
+      case 'medium':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
             <span className="w-1.5 h-1.5 rounded-full bg-amber-600"></span>
-            Moderate {confidencePct && <span className="opacity-80 font-normal">({confidencePct})</span>}
+            Medium {confidencePct && <span className="opacity-80 font-normal font-mono">({confidencePct})</span>}
           </span>
         );
-      case 'Low':
+      case 'low':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-teal-100 text-teal-800 border border-teal-200">
             <span className="w-1.5 h-1.5 rounded-full bg-teal-600"></span>
-            Low {confidencePct && <span className="opacity-80 font-normal">({confidencePct})</span>}
+            Low {confidencePct && <span className="opacity-80 font-normal font-mono">({confidencePct})</span>}
           </span>
         );
-      case 'Very Low':
+      case 'very low':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>
-            Very Low {confidencePct && <span className="opacity-80 font-normal">({confidencePct})</span>}
+            Very Low {confidencePct && <span className="opacity-80 font-normal font-mono">({confidencePct})</span>}
           </span>
         );
       default:
@@ -414,6 +422,7 @@ const Members: React.FC = () => {
           <table className="w-full text-left border-collapse">
             <thead className="text-[11px] text-on-surface-variant uppercase tracking-wider font-semibold border-b border-slate-200/40 bg-slate-50/50">
               <tr>
+                <th className="py-3.5 px-6">Rank</th>
                 <th className="py-3.5 px-6">Priority</th>
                 <th className="py-3.5 px-4">Patient ID</th>
                 <th className="py-3.5 px-4">CURRENT RISK</th>
@@ -426,7 +435,7 @@ const Members: React.FC = () => {
             <tbody className="text-[13px] divide-y divide-slate-100 bg-white/20">
               {isLoading && (
                 <tr>
-                  <td colSpan={7} className="text-center py-16 text-on-surface-variant font-medium">
+                  <td colSpan={8} className="text-center py-16 text-on-surface-variant font-medium">
                     <div className="flex flex-col items-center justify-center gap-3">
                       <Loader2 className="w-7 h-7 text-primary animate-spin" />
                       <span>Loading patient risk records...</span>
@@ -435,8 +444,13 @@ const Members: React.FC = () => {
                 </tr>
               )}
 
-              {!isLoading && paginatedMembers.map((member) => (
+              {!isLoading && paginatedMembers.map((member, idx) => (
                 <tr key={member.id} className="hover:bg-slate-50/30 transition-colors group">
+                  {/* Rank */}
+                  <td className="py-4 px-6 font-mono font-bold text-slate-500">
+                    #{(currentPage - 1) * pageSize + idx + 1}
+                  </td>
+
                   {/* Priority */}
                   <td className="py-4 px-6">
                     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${member.priorityColor}`}>
@@ -593,17 +607,16 @@ const Members: React.FC = () => {
                   </span>
                 </div>
 
-                {/* Risk Composition Grid (Future 5-Class vs SDOH vs Future 3-Class) */}
+                {/* Risk Composition Grid (Current Risk vs SDOH vs Future Risk) */}
                 <div>
                   <h4 className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-2.5">
-                    Future Risk Prediction Breakdown
+                    Risk Prediction Breakdown
                   </h4>
                   <div className="grid grid-cols-3 gap-2.5">
-                    {/* 5-Class Future Risk */}
+                    {/* Current Risk */}
                     <div className="flex flex-col items-center p-3 bg-slate-50 rounded-xl border border-slate-100 text-center">
                       <span className="text-sm font-bold text-slate-800">{selectedMember.future_risk_5.level}</span>
-                      <span className="text-[11px] font-bold text-error mt-0.5">{selectedMember.future_risk_5.confidence_pct}</span>
-                      <span className="text-[10px] text-slate-400 uppercase mt-1">FUTURE (5-Class)</span>
+                      <span className="text-[10px] text-slate-400 uppercase mt-1">CURRENT RISK</span>
                     </div>
 
                     {/* Social/SDOH */}
@@ -613,11 +626,10 @@ const Members: React.FC = () => {
                       <span className="text-[10px] text-slate-400 uppercase mt-1">SDOH Community</span>
                     </div>
 
-                    {/* 3-Class Future Risk */}
+                    {/* Future Risk */}
                     <div className="flex flex-col items-center p-3 bg-slate-50 rounded-xl border border-slate-100 text-center">
                       <span className="text-sm font-bold text-slate-800">{selectedMember.future_risk_3.level}</span>
-                      <span className="text-[11px] font-bold text-primary mt-0.5">{selectedMember.future_risk_3.confidence_pct}</span>
-                      <span className="text-[10px] text-slate-400 uppercase mt-1">FUTURE (3-Class)</span>
+                      <span className="text-[10px] text-slate-400 uppercase mt-1">FUTURE RISK</span>
                     </div>
                   </div>
                 </div>

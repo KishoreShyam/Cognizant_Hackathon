@@ -237,7 +237,6 @@ const Interventions: React.FC = () => {
               <tr>
                 <th className="px-6 py-3">Priority</th>
                 <th className="px-6 py-3">Member ID</th>
-                <th className="px-6 py-3">Clinical Risk</th>
                 <th className="px-6 py-3">SDOH Risk</th>
                 <th className="px-6 py-3">FUTURE RISK (5-CLASS)</th>
                 <th className="px-6 py-3">6M Future</th>
@@ -252,7 +251,7 @@ const Interventions: React.FC = () => {
             <tbody className="text-[13px] bg-white/20 divide-y divide-slate-100">
               {isLoading && (
                 <tr>
-                  <td colSpan={12} className="text-center py-16 text-on-surface-variant font-medium">
+                  <td colSpan={11} className="text-center py-16 text-on-surface-variant font-medium">
                     <div className="flex flex-col items-center justify-center gap-3">
                       <Loader2 className="w-7 h-7 text-primary animate-spin" />
                       <span>Loading intervention candidates...</span>
@@ -274,7 +273,6 @@ const Interventions: React.FC = () => {
                       <span className="text-[11px] font-mono text-primary font-semibold">{candidate.id}</span>
                     </div>
                   </td>
-                  <td className="px-6 py-4 font-medium">{candidate.clinicalRisk}</td>
                   <td className="px-6 py-4 font-medium">{candidate.sdohRisk}</td>
                   <td className="px-6 py-4 font-bold text-error">{candidate.future_risk_5}</td>
                   <td className="px-6 py-4">

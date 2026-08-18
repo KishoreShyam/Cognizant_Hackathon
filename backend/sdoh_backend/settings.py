@@ -129,3 +129,10 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # CORS configuration
 CORS_ALLOW_ALL_ORIGINS = True
+
+# Django REST Framework settings
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'sdoh.authentication.FirebaseAuthentication',
+    ],
+}
