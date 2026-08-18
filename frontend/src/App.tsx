@@ -13,6 +13,7 @@ import SDOHAnalysis from './pages/SDOHAnalysis';
 import Interventions from './pages/Interventions';
 import AIAssistant from './pages/AIAssistant';
 import CommunityInterventions from './pages/CommunityInterventions';
+import PatientUpload from './pages/PatientUpload';
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -72,6 +73,20 @@ function App() {
                   />
                   <main className="p-4 md:p-8 flex flex-col gap-8 w-full flex-1">
                     <Members />
+                  </main>
+                </>
+              } 
+            />
+            <Route 
+              path="/upload" 
+              element={
+                <>
+                  <Header 
+                    title="Patient Ingestion Hub" 
+                    subtitle="Upload rosters and evaluate patient-level and population-level health risk predictions" 
+                  />
+                  <main className="p-4 md:p-8 flex flex-col gap-8 w-full flex-1">
+                    <PatientUpload />
                   </main>
                 </>
               } 

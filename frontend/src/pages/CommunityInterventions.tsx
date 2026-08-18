@@ -371,8 +371,8 @@ const CommunityInterventions: React.FC = () => {
   // Filter lists
   const filteredCounties = useMemo(() => {
     return counties.filter(county => {
-      // Interventions prioritization should show only High and Very High (Critical) risks
-      const isHighOrCritical = county.risk_level.toUpperCase() === 'HIGH' || county.risk_level.toUpperCase() === 'VERY HIGH';
+      // Interventions prioritization should show only High and Critical risks
+      const isHighOrCritical = county.risk_level.toUpperCase() === 'HIGH' || county.risk_level.toUpperCase() === 'VERY HIGH' || county.risk_level.toUpperCase() === 'CRITICAL';
       if (!isHighOrCritical) return false;
 
       const matchesSearch = county.county_name.toLowerCase().includes(searchQuery.toLowerCase()) || county.top_driver.toLowerCase().includes(searchQuery.toLowerCase());
@@ -395,7 +395,7 @@ const CommunityInterventions: React.FC = () => {
   // Aggregate dashboard metrics
   const kpis = useMemo(() => {
     const total = counties.length;
-    const highVeryHigh = counties.filter(c => c.risk_level === 'HIGH' || c.risk_level === 'VERY HIGH').length;
+    const highVeryHigh = counties.filter(c => c.risk_level === 'HIGH' || c.risk_level === 'VERY HIGH' || c.risk_level === 'CRITICAL').length;
     const active = historyList.filter(h => h.status !== 'RESOLVED' && h.status !== 'FAILED').length;
     const pending = historyList.filter(h => h.status === 'PENDING').length;
     const sent = historyList.filter(h => h.status === 'SENT' || h.status === 'SIMULATED').length;
@@ -464,7 +464,7 @@ const CommunityInterventions: React.FC = () => {
         <div className="glass-card p-4 flex flex-col justify-between border-t-4 border-t-rose-500">
           <span className="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider block">Priority Counties</span>
           <div className="text-2xl font-black text-rose-600 mt-2">{kpis.highVeryHigh}</div>
-          <div className="text-[10px] text-rose-600 font-bold mt-1 flex items-center gap-0.5"><AlertOctagon className="w-3 h-3" /> High/Very High Risk</div>
+          <div className="text-[10px] text-rose-600 font-bold mt-1 flex items-center gap-0.5"><AlertOctagon className="w-3 h-3" /> High/Critical Risk</div>
         </div>
 
         <div className="glass-card p-4 flex flex-col justify-between border-t-4 border-t-orange-500">
@@ -541,7 +541,7 @@ const CommunityInterventions: React.FC = () => {
               className="border border-slate-200 rounded-md px-3 py-1.5 bg-white text-xs font-semibold text-slate-600 focus:outline-none focus:border-primary min-w-[130px] cursor-pointer"
             >
               <option value="All">Risk Level: All</option>
-              <option value="VERY HIGH">Very High (Critical)</option>
+              <option value="CRITICAL">Critical</option>
               <option value="HIGH">High</option>
             </select>
           )}

@@ -392,7 +392,7 @@ const RiskMap: React.FC = () => {
             {!isLoading && (
               <div className="absolute bottom-4 left-4 z-[1000] bg-white/95 backdrop-blur-sm p-3 rounded-xl border border-slate-200 shadow-lg text-[11px] space-y-1.5 pointer-events-none">
                 <p className="font-extrabold text-slate-600 uppercase tracking-wider text-[9px] border-b border-slate-100 pb-1.5">
-                  5-CLASS FUTURE RISK
+                  5-CLASS CURRENT RISK
                 </p>
                 {[
                   { color: '#dc2626', label: 'Critical / High Risk' },
@@ -469,10 +469,10 @@ const RiskMap: React.FC = () => {
                 {/* RISK OVERVIEW TAB */}
                 {activeCountyTab === 'overview' && (
                   <div className="p-4 space-y-3">
-                    {/* Future Risk Distribution — full width on top */}
+                    {/* Current Risk Distribution — full width on top */}
                     <div>
                       <p className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider mb-2">
-                        Future Risk Distribution (5 Classes)
+                        Current Risk Distribution (5 Classes)
                       </p>
                       <div className="space-y-2">
                         {(Object.entries(selectedRegion.future_risk_5_breakdown) as [string, number][]).map(([cls, count]) => {
@@ -515,13 +515,13 @@ const RiskMap: React.FC = () => {
                         <span className="text-xl font-extrabold text-rose-600 leading-none">{selectedRegion.high_risk_members}</span>
                         <span className="text-[9px] font-bold text-rose-600 uppercase leading-tight">High / Critical</span>
                       </div>
-                      {/* Avg Future Risk */}
+                      {/* Avg Current Risk */}
                       <div className="p-2.5 bg-blue-50 rounded-xl border border-blue-100 flex flex-col items-start gap-1">
                         <TrendingUp className="w-4 h-4 text-blue-500" />
                         <span className="text-xl font-extrabold text-blue-700 leading-none">
                           {selectedRegion.average_future_risk ? selectedRegion.average_future_risk.toFixed(1) : '—'}
                         </span>
-                        <span className="text-[9px] font-bold text-blue-600 uppercase leading-tight">Avg. Future Risk</span>
+                        <span className="text-[9px] font-bold text-blue-600 uppercase leading-tight">Avg. Current Risk</span>
                       </div>
                     </div>
                     {/* Community Intervention Action Card */}

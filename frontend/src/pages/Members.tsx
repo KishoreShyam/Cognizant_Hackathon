@@ -70,6 +70,14 @@ interface Member {
   priority: string;
   priority_label: string;
   priorityColor: string;
+  clinical_risk: {
+    level: string;
+    score: number;
+  };
+  community_risk: {
+    level: string;
+    score: number;
+  };
   future_risk_5: FutureRisk5;
   future_risk_3: FutureRisk3;
   sdoh_risk: SDOHRisk;
@@ -79,6 +87,7 @@ interface Member {
   status: string;
   statusColor: string;
   conditions: string[];
+  priority_score?: number;
   edVisits: number;
   ipVisits: number;
   outpatientVisits?: number;
@@ -120,20 +129,23 @@ const Members: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   const [searchQuery, setSearchQuery] = useState(countyParam || '');
-  const [riskFilter, setRiskFilter] = useState('All');
+  const [currentRiskFilter, setCurrentRiskFilter] = useState('All');
+  const [futureRiskFilter, setFutureRiskFilter] = useState('All');
   const [driverFilter, setDriverFilter] = useState('All');
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 10;
 
+
+
   // Fetch real data from backend API
   const fetchMembers = async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch('/api/members/').catch(() => 
-        fetch('http://127.0.0.1:8000/api/members/')
+      const response = await fetch(`/api/members/?t=${Date.now()}`).catch(() => 
+        fetch(`http://127.0.0.1:8000/api/members/?t=${Date.now()}`)
       );
 
       if (!response.ok) {
@@ -166,6 +178,14 @@ const Members: React.FC = () => {
     }
   }, [countyParam]);
 
+  // Sync risk filter from URL param
+  const riskParam = searchParams.get('risk');
+  useEffect(() => {
+    if (riskParam) {
+      setCurrentRiskFilter(riskParam);
+    }
+  }, [riskParam]);
+
   // Sync drawer state with URL param once members are loaded
   useEffect(() => {
     if (memberIdParam && members.length > 0) {
@@ -173,7 +193,6 @@ const Members: React.FC = () => {
       if (found) {
         setSelectedMember(found);
         setIsDrawerOpen(true);
-        setSearchQuery(found.id);
       }
     }
   }, [memberIdParam, members]);
@@ -189,9 +208,9 @@ const Members: React.FC = () => {
     setSearchParams({});
   };
 
-  // Filter members by search query, 5-class risk level, and driver category
+  // Filter and sort members dynamically based on driver filter and risk levels
   const filteredMembers = useMemo(() => {
-    return members.filter(m => {
+    const list = members.filter(m => {
       const q = searchQuery.toLowerCase().trim();
       const matchesSearch = 
         !q ||
@@ -200,20 +219,50 @@ const Members: React.FC = () => {
         m.tract_fips.toLowerCase().includes(q) ||
         m.county.toLowerCase().includes(q) ||
         m.driver.toLowerCase().includes(q) ||
-        m.future_risk_5.level.toLowerCase().includes(q) ||
-        m.future_risk_3.level.toLowerCase().includes(q);
+        (m.future_risk_5 && m.future_risk_5.level.toLowerCase().includes(q)) ||
+        (m.future_risk_3 && m.future_risk_3.level.toLowerCase().includes(q));
       
-      const matchesRisk = riskFilter === 'All' || m.future_risk_5.level === riskFilter || m.priority === riskFilter;
-      
-      const matchesDriver = 
-        driverFilter === 'All' || 
-        (driverFilter === 'Clinical' && m.driver_type === 'Clinical') ||
-        (driverFilter === 'SDOH' && m.driver_type === 'SDOH') ||
-        (driverFilter === 'Combined' && m.driver_type === 'Combined');
+      let matchesCurrentRisk = false;
+      if (currentRiskFilter === 'All') {
+        matchesCurrentRisk = true;
+      } else if (driverFilter === 'Clinical') {
+        matchesCurrentRisk = m.clinical_risk && m.clinical_risk.level.toUpperCase() === currentRiskFilter.toUpperCase();
+      } else if (driverFilter === 'SDOH') {
+        matchesCurrentRisk = m.community_risk && m.community_risk.level.toUpperCase() === currentRiskFilter.toUpperCase();
+      } else {
+        matchesCurrentRisk = m.future_risk_5 && m.future_risk_5.level.toUpperCase() === currentRiskFilter.toUpperCase();
+      }
 
-      return matchesSearch && matchesRisk && matchesDriver;
+      let matchesFutureRisk = false;
+      if (futureRiskFilter === 'All') {
+        matchesFutureRisk = true;
+      } else {
+        matchesFutureRisk = m.future_risk_3 && m.future_risk_3.level.toUpperCase() === futureRiskFilter.toUpperCase();
+      }
+      
+      let matchesDriver = false;
+      if (driverFilter === 'All') {
+        matchesDriver = true;
+      } else if (driverFilter === 'Clinical') {
+        matchesDriver = m.driver_type === 'Clinical';
+      } else if (driverFilter === 'SDOH') {
+        matchesDriver = m.driver_type === 'SDOH';
+      }
+
+      return matchesSearch && matchesCurrentRisk && matchesFutureRisk && matchesDriver;
     });
-  }, [members, searchQuery, riskFilter, driverFilter]);
+
+    // Sort descending by relevant risk scores
+    return [...list].sort((a, b) => {
+      if (driverFilter === 'Clinical') {
+        return (b.clinical_risk?.score || 0) - (a.clinical_risk?.score || 0);
+      } else if (driverFilter === 'SDOH') {
+        return (b.community_risk?.score || 0) - (a.community_risk?.score || 0);
+      } else {
+        return (b.priority_score || 0) - (a.priority_score || 0);
+      }
+    });
+  }, [members, searchQuery, currentRiskFilter, futureRiskFilter, driverFilter]);
 
   // Pagination calculation
   const totalPages = Math.max(1, Math.ceil(filteredMembers.length / pageSize));
@@ -362,8 +411,8 @@ const Members: React.FC = () => {
           />
         </div>
         <select 
-          value={riskFilter}
-          onChange={(e) => { setRiskFilter(e.target.value); setCurrentPage(1); }}
+          value={currentRiskFilter}
+          onChange={(e) => { setCurrentRiskFilter(e.target.value); setCurrentPage(1); }}
           className="py-2 pl-3 pr-8 bg-white rounded-lg border border-slate-200 text-[13px] text-on-surface outline-none focus:border-primary cursor-pointer"
         >
           <option value="All">Current Risk: All</option>
@@ -374,6 +423,16 @@ const Members: React.FC = () => {
           <option value="Very Low">Very Low</option>
         </select>
         <select 
+          value={futureRiskFilter}
+          onChange={(e) => { setFutureRiskFilter(e.target.value); setCurrentPage(1); }}
+          className="py-2 pl-3 pr-8 bg-white rounded-lg border border-slate-200 text-[13px] text-on-surface outline-none focus:border-primary cursor-pointer"
+        >
+          <option value="All">Future Risk: All</option>
+          <option value="High">High</option>
+          <option value="Moderate">Moderate</option>
+          <option value="Low">Low</option>
+        </select>
+        <select 
           value={driverFilter}
           onChange={(e) => { setDriverFilter(e.target.value); setCurrentPage(1); }}
           className="py-2 pl-3 pr-8 bg-white rounded-lg border border-slate-200 text-[13px] text-on-surface outline-none focus:border-primary cursor-pointer"
@@ -381,11 +440,10 @@ const Members: React.FC = () => {
           <option value="All">Primary Driver: All</option>
           <option value="Clinical">Clinical Dominant</option>
           <option value="SDOH">SDOH Dominant</option>
-          <option value="Combined">Combined Risk</option>
         </select>
         <div className="flex gap-2 ml-auto">
           <button 
-            onClick={() => { setSearchQuery(''); setRiskFilter('All'); setDriverFilter('All'); setCurrentPage(1); }}
+            onClick={() => { setSearchQuery(''); setCurrentRiskFilter('All'); setFutureRiskFilter('All'); setDriverFilter('All'); setCurrentPage(1); }}
             className="px-4 py-2 text-primary font-bold text-[13px] hover:bg-primary/5 rounded-lg transition-all cursor-pointer"
           >
             Reset
@@ -422,11 +480,16 @@ const Members: React.FC = () => {
           <table className="w-full text-left border-collapse">
             <thead className="text-[11px] text-on-surface-variant uppercase tracking-wider font-semibold border-b border-slate-200/40 bg-slate-50/50">
               <tr>
-                <th className="py-3.5 px-6">Rank</th>
                 <th className="py-3.5 px-6">Priority</th>
                 <th className="py-3.5 px-4">Patient ID</th>
-                <th className="py-3.5 px-4">CURRENT RISK</th>
-                <th className="py-3.5 px-4">SDOH RISK (COMMUNITY)</th>
+                {driverFilter !== 'SDOH' && (
+                  <th className="py-3.5 px-4">
+                    {driverFilter === 'Clinical' ? 'CLINICAL RISK' : 'CURRENT RISK'}
+                  </th>
+                )}
+                {driverFilter !== 'Clinical' && (
+                  <th className="py-3.5 px-4">SDOH RISK (COMMUNITY)</th>
+                )}
                 <th className="py-3.5 px-4">FUTURE RISK</th>
                 <th className="py-3.5 px-4">PRIMARY DRIVER (TREE-SHAP)</th>
                 <th className="py-3.5 px-6 text-right">Action</th>
@@ -435,7 +498,7 @@ const Members: React.FC = () => {
             <tbody className="text-[13px] divide-y divide-slate-100 bg-white/20">
               {isLoading && (
                 <tr>
-                  <td colSpan={8} className="text-center py-16 text-on-surface-variant font-medium">
+                  <td colSpan={driverFilter === 'All' ? 7 : 6} className="text-center py-16 text-on-surface-variant font-medium">
                     <div className="flex flex-col items-center justify-center gap-3">
                       <Loader2 className="w-7 h-7 text-primary animate-spin" />
                       <span>Loading patient risk records...</span>
@@ -446,16 +509,9 @@ const Members: React.FC = () => {
 
               {!isLoading && paginatedMembers.map((member, idx) => (
                 <tr key={member.id} className="hover:bg-slate-50/30 transition-colors group">
-                  {/* Rank */}
+                  {/* Priority (formerly Rank) */}
                   <td className="py-4 px-6 font-mono font-bold text-slate-500">
                     #{(currentPage - 1) * pageSize + idx + 1}
-                  </td>
-
-                  {/* Priority */}
-                  <td className="py-4 px-6">
-                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${member.priorityColor}`}>
-                      {member.priority}
-                    </span>
                   </td>
 
                   {/* Patient Name & ID */}
@@ -468,19 +524,25 @@ const Members: React.FC = () => {
                   </td>
                   
                   {/* CURRENT RISK */}
-                  <td className="py-4 px-4">
-                    <div className="flex items-center gap-2">
-                      {getRiskBadge(member.future_risk_5.level)}
-                    </div>
-                  </td>
+                  {driverFilter !== 'SDOH' && (
+                    <td className="py-4 px-4">
+                      <div className="flex items-center gap-2">
+                        {getRiskBadge(driverFilter === 'Clinical' && member.clinical_risk ? member.clinical_risk.level : member.future_risk_5.level)}
+                      </div>
+                    </td>
+                  )}
 
                   {/* SDOH RISK (COMMUNITY) */}
-                  <td className="py-4 px-4">
-                    <div className="flex flex-col">
-                      <span className="font-semibold text-slate-700">{member.sdoh_risk.label}</span>
-                      <span className="text-[10px] text-slate-400">{member.county}</span>
-                    </div>
-                  </td>
+                  {driverFilter !== 'Clinical' && (
+                    <td className="py-4 px-4">
+                      <div className="flex flex-col">
+                        <span className="font-semibold text-slate-700">
+                          {driverFilter === 'SDOH' && member.community_risk ? member.community_risk.level : member.sdoh_risk.label}
+                        </span>
+                        <span className="text-[10px] text-slate-400">{member.county}</span>
+                      </div>
+                    </td>
+                  )}
 
                   {/* FUTURE RISK (3-CLASS) */}
                   <td className="py-4 px-4">
@@ -524,7 +586,7 @@ const Members: React.FC = () => {
 
               {!isLoading && filteredMembers.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="text-center py-12 text-on-surface-variant font-medium">
+                  <td colSpan={driverFilter === 'All' ? 7 : 6} className="text-center py-12 text-on-surface-variant font-medium">
                     No patient records found matching search or filter criteria.
                   </td>
                 </tr>

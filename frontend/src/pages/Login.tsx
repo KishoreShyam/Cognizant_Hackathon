@@ -4,7 +4,7 @@ import {
   sendPasswordResetEmail 
 } from 'firebase/auth';
 import { auth } from '../firebase';
-import { ShieldAlert, Mail, Lock, Loader2, KeyRound } from 'lucide-react';
+import { Mail, Lock, Loader2, KeyRound } from 'lucide-react';
 
 const Login: React.FC = () => {
   const [isReset, setIsReset] = useState(false);
@@ -54,11 +54,13 @@ const Login: React.FC = () => {
         
         {/* Brand Header */}
         <div className="flex flex-col items-center text-center gap-3">
-          <div className="w-12 h-12 bg-gradient-to-br from-primary to-indigo-600 rounded-2xl flex items-center justify-center shadow-lg shadow-primary/20">
-            <ShieldAlert className="text-white w-7 h-7" />
-          </div>
+          <img 
+            src="/logo.jpg" 
+            alt="CareSync Logo" 
+            className="w-12 h-12 rounded-2xl shadow-lg object-cover border border-slate-100" 
+          />
           <div>
-            <h1 className="text-2xl font-black text-slate-800 tracking-tight">HealthMetrics Portal</h1>
+            <h1 className="text-2xl font-black text-slate-800 tracking-tight">CareSync SDOH Portal</h1>
             <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest mt-1">
               {isReset ? 'Reset Password' : 'Secure Admin Login'}
             </p>

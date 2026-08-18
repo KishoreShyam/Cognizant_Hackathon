@@ -85,7 +85,7 @@ class CurrentPredictionEngine:
         elif score < 80.0:
             return "HIGH"
         else:
-            return "VERY HIGH"
+            return "CRITICAL"
 
     def predict_current_patient(self, patient_id_or_instance, save_to_db: bool = True) -> dict:
         """Runs end-to-end current patient risk prediction workflow."""

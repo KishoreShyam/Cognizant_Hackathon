@@ -9,7 +9,8 @@ import {
   Settings, 
   HelpCircle,
   ShieldAlert,
-  LogOut
+  LogOut,
+  Upload
 } from 'lucide-react';
 import { signOut } from 'firebase/auth';
 import { auth } from '../firebase';
@@ -18,6 +19,7 @@ const Sidebar: React.FC = () => {
   const navItems = [
     { path: '/', label: 'Overview', icon: LayoutDashboard },
     { path: '/members', label: 'Members', icon: Users },
+    { path: '/upload', label: 'Upload Patient', icon: Upload },
     { path: '/map', label: 'Risk Map', icon: Map },
     { path: '/sdoh-analysis', label: 'SDOH Analysis', icon: BarChart3 },
     { path: '/interventions', label: 'Priority & Interventions', icon: CheckSquare },
@@ -29,12 +31,14 @@ const Sidebar: React.FC = () => {
       <div className="py-8 px-6 flex flex-col h-full">
         {/* Brand Header */}
         <div className="flex items-center gap-3 mb-10 px-2">
-          <div className="w-10 h-10 shrink-0 bg-gradient-to-br from-primary-container to-primary rounded-xl flex items-center justify-center shadow-lg shadow-primary/20">
-            <ShieldAlert className="text-white w-6 h-6" />
-          </div>
+          <img 
+            src="/logo.jpg" 
+            alt="CareSync Logo" 
+            className="w-10 h-10 shrink-0 rounded-xl shadow-lg object-cover border border-slate-100" 
+          />
           <div className="flex-1">
-            <h1 className="text-lg font-bold text-on-surface tracking-tight leading-tight">HealthMetrics</h1>
-            <p className="text-[12px] text-on-surface-variant font-medium">Enterprise Admin</p>
+            <h1 className="text-base font-extrabold text-slate-800 tracking-tight leading-none">CareSync SDOH</h1>
+            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1">Healthcare Intelligence</p>
           </div>
         </div>
 

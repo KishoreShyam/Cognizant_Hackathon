@@ -129,7 +129,7 @@ const MessageBubble: React.FC<{ msg: ChatMessage }> = ({ msg }) => {
       <div className="bg-white border border-slate-200 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm max-w-[85%]">
         <div className="text-[13px] leading-relaxed text-slate-800 space-y-2">{formatted}</div>
         <p className="text-[10px] text-slate-400 mt-2">
-          {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · HealthMetrics AI
+          {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · CareSync AI
         </p>
       </div>
     </div>
@@ -254,7 +254,7 @@ const AIAssistant: React.FC = () => {
       setMessages([{
         id: genId(),
         role: 'assistant',
-        content: `Hello! I'm the HealthMetrics Risk Understanding Assistant.\n\nI'm ready to help you understand **${data.name}**'s risk profile. This member is currently classified as **${risk} Future Risk** (5-Class CatBoost model, ${data.risk_5_confidence_pct} confidence).\n\nThe primary driver identified by the ML system is **${topDriver}**. I can explain the SHAP drivers, assess the SDOH and clinical factors, and help identify potential care-management considerations.\n\nUse the quick-action buttons below or ask me anything about this member.`,
+        content: `Hello! I'm the CareSync Risk Understanding Assistant.\n\nI'm ready to help you understand **${data.name}**'s risk profile. This member is currently classified as **${risk} Future Risk** (5-Class CatBoost model, ${data.risk_5_confidence_pct} confidence).\n\nThe primary driver identified by the ML system is **${topDriver}**. I can explain the SHAP drivers, assess the SDOH and clinical factors, and help identify potential care-management considerations.\n\nUse the quick-action buttons below or ask me anything about this member.`,
         timestamp: new Date(),
       }]);
     } catch (err: any) {

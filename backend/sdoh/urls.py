@@ -13,6 +13,7 @@ from .views import (
     CurrentCommunityDetailView,
     BatchCurrentPredictView,
     CurrentPatientListView,
+    CurrentPatientUploadView,
     CommunityCountyListView,
     CommunityCountyDetailView,
     CommunityCountyDriversView,
@@ -43,6 +44,7 @@ urlpatterns = [
     path('model-info/', ModelInfoView.as_view(), name='model-info'),
     path('current-patients/', CurrentPatientListView.as_view(), name='current-patient-list'),
     path('current-patients/predict-all/', BatchCurrentPredictView.as_view(), name='batch-current-predict-all'),
+    path('current-patients/upload/', CurrentPatientUploadView.as_view(), name='current-patient-upload'),
     path('current-patients/<str:patient_id>/predict/', CurrentPatientPredictView.as_view(), name='current-patient-predict'),
     path('current-communities/<str:tract_fips>/', CurrentCommunityDetailView.as_view(), name='current-community-detail'),
     

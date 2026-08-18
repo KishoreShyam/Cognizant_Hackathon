@@ -116,3 +116,14 @@ body {
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
 }
+
+/* Prevent Tailwind v4 compiler purging dynamic classes */
+.bg-primary {
+  background-color: #005599 !important;
+}
+.bg-secondary {
+  background-color: #046a64 !important;
+}
+.bg-error {
+  background-color: #ba1a1a !important;
+}

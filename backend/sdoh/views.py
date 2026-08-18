@@ -136,9 +136,17 @@ class PatientListView(APIView):
             # Risk levels
             if latest_curr_pred:
                 level_5 = latest_curr_pred.final_current_risk_level
+                if level_5 == 'VERY HIGH':
+                    level_5 = 'CRITICAL'
                 score_5 = latest_curr_pred.final_current_risk_score
                 clinical_score = latest_curr_pred.clinical_risk_score
                 community_score = latest_curr_pred.community_risk_score
+                clinical_risk_level = getattr(latest_curr_pred, 'clinical_risk_level', 'LOW') or 'LOW'
+                if clinical_risk_level in ['VERY HIGH', 'VERY_HIGH']:
+                    clinical_risk_level = 'CRITICAL'
+                community_risk_level = getattr(latest_curr_pred, 'community_risk_level', 'LOW') or 'LOW'
+                if community_risk_level in ['VERY HIGH', 'VERY_HIGH']:
+                    community_risk_level = 'CRITICAL'
                 raw_sdoh = latest_curr_pred.raw_sdoh_values or {}
                 norm_sdoh = latest_curr_pred.normalized_sdoh_values or {}
                 risk_sdoh = latest_curr_pred.risk_oriented_sdoh_values or {}
@@ -149,6 +157,8 @@ class PatientListView(APIView):
                 score_5 = 10.0
                 clinical_score = 10.0
                 community_score = 10.0
+                clinical_risk_level = 'LOW'
+                community_risk_level = 'LOW'
                 raw_sdoh = {}
                 norm_sdoh = {}
                 risk_sdoh = {}
@@ -282,6 +292,14 @@ class PatientListView(APIView):
                 "priority": priority_level,
                 "priority_label": f"Priority Risk: {priority_level} (Score: {priority_score:.2f})",
                 "priorityColor": priority_color,
+                "clinical_risk": {
+                    "level": clinical_risk_level,
+                    "score": clinical_score
+                },
+                "community_risk": {
+                    "level": community_risk_level,
+                    "score": community_score
+                },
                 "future_risk_5": {
                     "level": level_5,
                     "class": 0,
@@ -680,14 +698,180 @@ def compute_population_tree_shap(patients_list, engine):
     return sdoh_drivers, clinical_drivers
 
 
+def get_current_prediction_driver(pred):
+    if not pred:
+        return 'Tract SDOH Factors', 'SDOH'
+    
+    driver_type = 'Clinical' if pred.clinical_risk_score > pred.community_risk_score else 'SDOH'
+    
+    top_clinical = None
+    if pred.clinical_shap_drivers:
+        try:
+            top_d = pred.clinical_shap_drivers[0]
+            top_clinical = f"{top_d.get('display_name', top_d.get('feature'))} ({top_d.get('shap_formatted', '+0.00')})"
+        except Exception:
+            pass
+            
+    top_sdoh = None
+    if pred.sdoh_feature_contribution_percentages:
+        try:
+            sorted_sdoh = sorted(pred.sdoh_feature_contribution_percentages.items(), key=lambda x: -x[1])
+            if sorted_sdoh:
+                feat_name, pct = sorted_sdoh[0]
+                display_name = feat_name.replace('_', ' ').title()
+                top_sdoh = f"{display_name} ({pct:.1f}%)"
+        except Exception:
+            pass
+            
+    if driver_type == 'Clinical' and top_clinical:
+        return top_clinical, 'Clinical'
+    elif top_sdoh:
+        return top_sdoh, 'SDOH'
+    elif top_clinical:
+        return top_clinical, 'Clinical'
+    else:
+        return 'Tract SDOH Factors', 'SDOH'
+
+
+def compute_current_population_drivers(patients_list, pred_map):
+    if not patients_list:
+        return [], []
+
+    total_n = len(patients_list)
+    clin_accum = {}
+    sdoh_accum = {}
+    
+    from .current_prediction_engine import COMMUNITY_STATS
+    
+    for p in patients_list:
+        pred = pred_map.get(p.PATIENT_ID)
+        if not pred:
+            continue
+            
+        if pred.clinical_shap_drivers:
+            for d in pred.clinical_shap_drivers:
+                feat = d.get('feature')
+                if not feat:
+                    continue
+                sv = float(d.get('shap_value', 0.0))
+                rv = d.get('raw_value', 0.0)
+                try:
+                    rv_float = float(rv)
+                except (ValueError, TypeError):
+                    rv_float = 0.0
+                    
+                if feat not in clin_accum:
+                    clin_accum[feat] = {
+                        'shap_sum': 0.0,
+                        'abs_shap_sum': 0.0,
+                        'pos_count': 0,
+                        'count': 0,
+                        'display_name': d.get('display_name', feat.replace('_', ' ').title()),
+                        'raw_vals': []
+                    }
+                clin_accum[feat]['shap_sum'] += sv
+                clin_accum[feat]['abs_shap_sum'] += abs(sv)
+                clin_accum[feat]['count'] += 1
+                if sv > 0.0001:
+                    clin_accum[feat]['pos_count'] += 1
+                clin_accum[feat]['raw_vals'].append(rv_float)
+                
+        if pred.risk_oriented_sdoh_values and pred.raw_sdoh_values:
+            for feat in COMMUNITY_STATS.keys():
+                risk_val = float(pred.risk_oriented_sdoh_values.get(feat, 0.0))
+                raw_val = float(pred.raw_sdoh_values.get(feat, 0.0))
+                
+                if feat not in sdoh_accum:
+                    sdoh_accum[feat] = {
+                        'risk_sum': 0.0,
+                        'count': 0,
+                        'display_name': feat.replace('_', ' ').title(),
+                        'raw_vals': []
+                    }
+                sdoh_accum[feat]['risk_sum'] += risk_val
+                sdoh_accum[feat]['count'] += 1
+                sdoh_accum[feat]['raw_vals'].append(raw_val)
+
+    clinical_drivers = []
+    for feat, acc in clin_accum.items():
+        n = len(acc['raw_vals']) or 1
+        mean_abs = acc['abs_shap_sum'] / n
+        mean_s = acc['shap_sum'] / n
+        affected_cnt = acc['pos_count'] or (acc['count'] if mean_abs > 0.01 else 0)
+        affected_pct = round(affected_cnt / n * 100, 1)
+        
+        avg_val_raw = sum(acc['raw_vals']) / len(acc['raw_vals']) if acc['raw_vals'] else 0.0
+        avg_val_str = str(int(round(avg_val_raw))) if abs(avg_val_raw - round(avg_val_raw)) < 0.05 else f"{avg_val_raw:.1f}"
+        
+        clinical_drivers.append({
+            'feature': feat,
+            'display_name': acc['display_name'],
+            'mean_abs_shap': round(mean_abs, 4),
+            'mean_shap': round(mean_s, 4),
+            'shap_formatted': f"{mean_s:+.3f}" if abs(mean_s) >= 0.001 else f"{mean_s:+.4f}",
+            'affected_members': affected_cnt,
+            'total_members': total_n,
+            'affected_percentage': affected_pct,
+            'affected_display': f"{affected_cnt} / {total_n} ({int(round(affected_pct))}%)",
+            'average_value': avg_val_str,
+            'average_value_raw': round(avg_val_raw, 2),
+            'category': 'Clinical',
+        })
+    clinical_drivers.sort(key=lambda x: -x['mean_abs_shap'])
+
+    sdoh_drivers = []
+    for feat, acc in sdoh_accum.items():
+        n = len(acc['raw_vals']) or 1
+        mean_s = acc['risk_sum'] / n
+        mean_abs = mean_s
+        
+        risk_vals = [pred_map[p.PATIENT_ID].risk_oriented_sdoh_values.get(feat, 0.0) for p in patients_list if p.PATIENT_ID in pred_map]
+        affected_cnt = sum(1 for rv in risk_vals if rv > 0.35)
+        affected_pct = round(affected_cnt / total_n * 100, 1) if total_n > 0 else 0.0
+
+        avg_val_raw = sum(acc['raw_vals']) / len(acc['raw_vals']) if acc['raw_vals'] else 0.0
+        feat_lower = feat.lower()
+        if 'income' in feat_lower:
+            avg_val_str = f"${int(round(avg_val_raw)):,}"
+        elif any(k in feat_lower for k in [
+            'poverty', 'housing', 'unemploy', 'uninsur', 'disab',
+            'broadband', 'education', 'rate', 'pct', 'access', 'limited_english'
+        ]):
+            avg_val_str = f"{avg_val_raw:.1f}%"
+        else:
+            avg_val_str = f"{avg_val_raw:.2f}"
+            
+        sdoh_drivers.append({
+            'feature': feat,
+            'display_name': acc['display_name'],
+            'mean_abs_shap': round(mean_abs, 4),
+            'mean_shap': round(mean_s, 4),
+            'shap_formatted': f"+{mean_s:.3f}",
+            'affected_members': affected_cnt,
+            'total_members': total_n,
+            'affected_percentage': affected_pct,
+            'affected_display': f"{affected_cnt} / {total_n} ({int(round(affected_pct))}%)",
+            'average_value': avg_val_str,
+            'average_value_raw': round(avg_val_raw, 2),
+            'category': 'SDOH',
+        })
+    sdoh_drivers.sort(key=lambda x: -x['mean_abs_shap'])
+
+    return sdoh_drivers, clinical_drivers
+
+
+
 class CountyRiskMapView(APIView):
     """
     GET /api/map/counties/
     
-    Aggregates real member records, 5-class & 3-class future risk predictions, population TreeSHAP drivers,
-    and Community SDOH at the County and Census Tract levels for the California Geographic Risk Analysis Map.
+    Aggregates real current member records, XGBoost current risk predictions, population drivers,
+    and Current Community SDOH at the County and Census Tract levels for the California Geographic Risk Analysis Map.
     """
     def get(self, request):
+        import logging
+        logger = logging.getLogger(__name__)
+
         # ── Cache check ──────────────────────────────────────────────────────
         force_refresh = request.query_params.get('refresh') == '1'
         cache_key = 'county_risk_map'
@@ -698,18 +882,19 @@ class CountyRiskMapView(APIView):
                 return Response(cached_data, status=status.HTTP_200_OK)
         # ────────────────────────────────────────────────────────────────────
 
-        engine = get_prediction_engine()
-        patients = list(Patient.objects.all().order_by('patient_id'))
+        from .current_prediction_engine import get_current_engine, COMMUNITY_STATS
+        engine = get_current_engine()
+        patients = list(CurrentPatient.objects.all().order_by('PATIENT_ID'))
         
-        fips_list = [p.tract_fips for p in patients if p.tract_fips]
+        fips_list = [p.FIPS_ID for p in patients if p.FIPS_ID]
         sdoh_map = {
             s.tract_fips: s 
-            for s in CommunitySDOH.objects.filter(tract_fips__in=fips_list)
+            for s in CurrentCommunity.objects.filter(tract_fips__in=fips_list)
         }
 
         pred_map = {
             pred.patient_id: pred 
-            for pred in PatientRiskPrediction.objects.filter(patient__in=patients)
+            for pred in CurrentPatientPrediction.objects.filter(patient__in=patients).order_by('prediction_timestamp')
         }
 
         # Group by county and by tract_fips
@@ -717,22 +902,45 @@ class CountyRiskMapView(APIView):
         tract_groups = defaultdict(list)
 
         for p in patients:
-            pred = pred_map.get(p.id)
-            if pred and not is_prediction_stale(p, pred):
-                eval_res = prediction_to_dict(pred, patient=p)
-            else:
-                eval_res = engine.predict_patient(p, save_to_db=True, verbose=False)
+            pred = pred_map.get(p.PATIENT_ID)
+            if not pred:
+                try:
+                    engine.predict_current_patient(p, save_to_db=True)
+                    pred = CurrentPatientPrediction.objects.filter(patient=p).order_by('-prediction_timestamp').first()
+                except Exception as e:
+                    logger.error(f"Failed to calculate current prediction for {p.PATIENT_ID}: {e}")
 
-            sdoh = sdoh_map.get(p.tract_fips)
-            county_name = sdoh.county if sdoh and sdoh.county else 'California County'
-            county_groups[county_name].append((p, sdoh, eval_res))
-            tract_groups[p.tract_fips].append((p, sdoh, eval_res))
+            # update our local pred map in case we added it
+            if pred:
+                pred_map[p.PATIENT_ID] = pred
+
+            sdoh = sdoh_map.get(p.FIPS_ID)
+            county_name = sdoh.county_name if sdoh and sdoh.county_name else 'California County'
+            county_groups[county_name].append((p, sdoh, pred))
+            tract_groups[p.FIPS_ID].append((p, sdoh, pred))
 
         county_list = []
         total_high_priority_all = 0
 
-        # Score weights for 5-class average calculation (1.0 = Very Low, 5.0 = Critical)
+        # Score weights for risk level (1.0 = Very Low, 5.0 = Critical/Very High)
         risk_weights_5 = {'Very Low': 1.0, 'Low': 2.0, 'Moderate': 3.0, 'High': 4.0, 'Critical': 5.0}
+
+        risk_level_map = {
+            'VERY HIGH': 'Critical',
+            'CRITICAL': 'Critical',
+            'HIGH': 'High',
+            'MEDIUM': 'Moderate',
+            'LOW': 'Low',
+            'VERY LOW': 'Very Low'
+        }
+        level_3_map = {
+            'VERY HIGH': 'High',
+            'CRITICAL': 'High',
+            'HIGH': 'High',
+            'MEDIUM': 'Moderate',
+            'LOW': 'Low',
+            'VERY LOW': 'Low'
+        }
 
         for county_name, items in county_groups.items():
             total_members = len(items)
@@ -750,11 +958,20 @@ class CountyRiskMapView(APIView):
             driver_counts = defaultdict(int)
             total_score_sum = 0.0
 
-            county_patients_only = [p for p, sdoh, eval_res in items]
+            county_patients_only = [p for p, sdoh, pred in items]
 
-            for p, sdoh, eval_res in items:
-                level_5 = eval_res["future_risk_5"]["level"]
-                level_3 = eval_res["future_risk_3"]["level"]
+            for p, sdoh, pred in items:
+                if pred:
+                    level_5 = risk_level_map.get(pred.final_current_risk_level, 'Low')
+                    level_3 = level_3_map.get(pred.final_current_risk_level, 'Low')
+                    driver, driver_type = get_current_prediction_driver(pred)
+                    priority = pred.intervention_priority if hasattr(pred, 'intervention_priority') else f"{level_5} priority intervention"
+                else:
+                    level_5 = 'Low'
+                    level_3 = 'Low'
+                    driver = 'Tract SDOH Factors'
+                    driver_type = 'SDOH'
+                    priority = 'Low priority intervention'
                 
                 if level_5 in counts_5_class:
                     counts_5_class[level_5] += 1
@@ -762,32 +979,47 @@ class CountyRiskMapView(APIView):
                     counts_3_class[level_3] += 1
 
                 total_score_sum += risk_weights_5.get(level_5, 2.0)
-                driver = eval_res["driver"]
                 driver_counts[driver] += 1
 
                 if sdoh:
-                    if sdoh.poverty_2022 is not None: poverty_vals.append(sdoh.poverty_2022)
-                    if sdoh.housing_burden_2022 is not None: housing_vals.append(sdoh.housing_burden_2022)
-                    if sdoh.unemployment_2022 is not None: unemployment_vals.append(sdoh.unemployment_2022)
-                    if sdoh.uninsured_2022 is not None: uninsured_vals.append(sdoh.uninsured_2022)
-                    if sdoh.food_access_population_2022 is not None: food_vals.append(sdoh.food_access_population_2022)
-                    if sdoh.income_2022 is not None: income_vals.append(sdoh.income_2022)
+                    if sdoh.poverty_rate is not None: poverty_vals.append(sdoh.poverty_rate)
+                    if sdoh.housing_cost_burden is not None: housing_vals.append(sdoh.housing_cost_burden)
+                    if sdoh.unemployment_rate is not None: unemployment_vals.append(sdoh.unemployment_rate)
+                    if sdoh.uninsured_rate is not None: uninsured_vals.append(sdoh.uninsured_rate)
+                    if sdoh.low_access_population_rate is not None: food_vals.append(sdoh.low_access_population_rate)
+                    if sdoh.median_household_income is not None: income_vals.append(sdoh.median_household_income)
+
+                # Mapped class probabilities to get a confidence value
+                if pred:
+                    probs = {
+                        'VERY LOW': pred.clinical_probability_very_low,
+                        'LOW': pred.clinical_probability_low,
+                        'MEDIUM': pred.clinical_probability_medium,
+                        'HIGH': pred.clinical_probability_high,
+                        'VERY HIGH': pred.clinical_probability_very_high,
+                        'CRITICAL': pred.clinical_probability_very_high
+                    }
+                    conf_val_5 = probs.get(pred.clinical_risk_level, 0.5) * 100.0
+                    conf_val_3 = pred.clinical_probability_high * 100.0 # fallback
+                else:
+                    conf_val_5 = 50.0
+                    conf_val_3 = 50.0
 
                 county_member_details.append({
-                    "id": p.patient_id,
-                    "patient_id": p.patient_id,
-                    "name": p.name or f"Patient {p.patient_id}",
-                    "tract_fips": p.tract_fips,
+                    "id": p.PATIENT_ID,
+                    "patient_id": p.PATIENT_ID,
+                    "name": p.PATIENT_NAME or f"Patient {p.PATIENT_ID}",
+                    "tract_fips": p.FIPS_ID,
                     "future_risk_5": level_5,
-                    "future_risk_5_confidence_pct": eval_res["future_risk_5"]["confidence_pct"],
+                    "future_risk_5_confidence_pct": round(conf_val_5, 1),
                     "future_risk_3": level_3,
-                    "future_risk_3_confidence_pct": eval_res["future_risk_3"]["confidence_pct"],
+                    "future_risk_3_confidence_pct": round(conf_val_3, 1),
                     "driver": driver,
-                    "driver_type": eval_res.get("driver_type", "SDOH"),
-                    "priority": eval_res["intervention"]["action_headline"],
-                    "encounters": int(p.encounters_last_12m or 0),
-                    "ed_visits": int(p.emergency_visits_last_12m or 0),
-                    "ip_visits": int(p.inpatient_admissions_last_12m or 0),
+                    "driver_type": driver_type,
+                    "priority": priority,
+                    "encounters": int(p.EMERGENCY_VISITS or 0) + int(p.INPATIENT_ADMISSIONS or 0) + int(p.OUTPATIENT_VISITS or 0),
+                    "ed_visits": int(p.EMERGENCY_VISITS or 0),
+                    "ip_visits": int(p.INPATIENT_ADMISSIONS or 0),
                 })
 
             high_risk_count = counts_5_class['Critical'] + counts_5_class['High']
@@ -800,7 +1032,7 @@ class CountyRiskMapView(APIView):
             avg_food = sum(food_vals) / len(food_vals) if food_vals else 0.0
             avg_income = sum(income_vals) / len(income_vals) if income_vals else 0.0
 
-            # Average future risk (1.0 to 5.0 scale)
+            # Average risk (1.0 to 5.0 scale)
             avg_future_risk_num = round(total_score_sum / total_members, 1) if total_members > 0 else 2.0
 
             # SDOH Environment classification
@@ -830,9 +1062,8 @@ class CountyRiskMapView(APIView):
                 status_label = 'Stable'
                 status_color = 'bg-teal-100 text-teal-800 border-teal-200'
 
-            # Aggregate stored per-patient SHAP drivers (fast — no ML inference)
-            county_patient_ids = [p.id for p in county_patients_only]
-            pop_sdoh_drivers, pop_clin_drivers = compute_shap_from_stored_predictions(county_patient_ids, pred_map)
+            # Aggregate stored per-patient SHAP drivers
+            pop_sdoh_drivers, pop_clin_drivers = compute_current_population_drivers(county_patients_only, pred_map)
 
             # Top drivers preview
             top_drivers = []
@@ -884,8 +1115,8 @@ class CountyRiskMapView(APIView):
         import hashlib
         tract_list = []
         for tract_fips, items in tract_groups.items():
-            first_p, sdoh, first_eval = items[0]
-            county_name = sdoh.county if sdoh and sdoh.county else 'California'
+            first_p, sdoh, first_pred = items[0]
+            county_name = sdoh.county_name if sdoh and sdoh.county_name else 'California'
             base_coords = CALIFORNIA_COUNTY_COORDS.get(county_name, [36.7783, -119.4179])
             
             # Deterministic tract offset calculation based on FIPS
@@ -902,46 +1133,71 @@ class CountyRiskMapView(APIView):
             t_driver_counts = defaultdict(int)
             t_score_sum = 0.0
 
-            tract_patients_only = [p for p, s, eval_res in items]
+            tract_patients_only = [p for p, s, pr in items]
 
-            for p, s, eval_res in items:
-                level_5 = eval_res["future_risk_5"]["level"]
-                level_3 = eval_res["future_risk_3"]["level"]
+            for p, s, pr in items:
+                if pr:
+                    level_5 = risk_level_map.get(pr.final_current_risk_level, 'Low')
+                    level_3 = level_3_map.get(pr.final_current_risk_level, 'Low')
+                    driver, driver_type = get_current_prediction_driver(pr)
+                    priority = pr.intervention_priority if hasattr(pr, 'intervention_priority') else f"{level_5} priority intervention"
+                else:
+                    level_5 = 'Low'
+                    level_3 = 'Low'
+                    driver = 'Tract SDOH Factors'
+                    driver_type = 'SDOH'
+                    priority = 'Low priority intervention'
+
                 if level_5 in counts_5: counts_5[level_5] += 1
                 if level_3 in counts_3: counts_3[level_3] += 1
                 t_score_sum += risk_weights_5.get(level_5, 2.0)
-                driver = eval_res["driver"]
                 t_driver_counts[driver] += 1
+
+                if pr:
+                    probs = {
+                        'VERY LOW': pr.clinical_probability_very_low,
+                        'LOW': pr.clinical_probability_low,
+                        'MEDIUM': pr.clinical_probability_medium,
+                        'HIGH': pr.clinical_probability_high,
+                        'VERY HIGH': pr.clinical_probability_very_high,
+                        'CRITICAL': pr.clinical_probability_very_high
+                    }
+                    conf_val_5 = probs.get(pr.clinical_risk_level, 0.5) * 100.0
+                    conf_val_3 = pr.clinical_probability_high * 100.0
+                else:
+                    conf_val_5 = 50.0
+                    conf_val_3 = 50.0
+
                 tract_member_details.append({
-                    "id": p.patient_id,
-                    "patient_id": p.patient_id,
-                    "name": p.name or f"Patient {p.patient_id}",
-                    "tract_fips": p.tract_fips,
+                    "id": p.PATIENT_ID,
+                    "patient_id": p.PATIENT_ID,
+                    "name": p.PATIENT_NAME or f"Patient {p.PATIENT_ID}",
+                    "tract_fips": p.FIPS_ID,
                     "future_risk_5": level_5,
-                    "future_risk_5_confidence_pct": eval_res["future_risk_5"]["confidence_pct"],
+                    "future_risk_5_confidence_pct": round(conf_val_5, 1),
                     "future_risk_3": level_3,
-                    "future_risk_3_confidence_pct": eval_res["future_risk_3"]["confidence_pct"],
+                    "future_risk_3_confidence_pct": round(conf_val_3, 1),
                     "driver": driver,
-                    "driver_type": eval_res.get("driver_type", "SDOH"),
-                    "priority": eval_res["intervention"]["action_headline"],
-                    "encounters": int(p.encounters_last_12m or 0),
-                    "ed_visits": int(p.emergency_visits_last_12m or 0),
-                    "ip_visits": int(p.inpatient_admissions_last_12m or 0),
+                    "driver_type": driver_type,
+                    "priority": priority,
+                    "encounters": int(p.EMERGENCY_VISITS or 0) + int(p.INPATIENT_ADMISSIONS or 0) + int(p.OUTPATIENT_VISITS or 0),
+                    "ed_visits": int(p.EMERGENCY_VISITS or 0),
+                    "ip_visits": int(p.INPATIENT_ADMISSIONS or 0),
                 })
 
             high_count = counts_5['Critical'] + counts_5['High']
-            pov_val = round(float(sdoh.poverty_2022 or 0), 1) if sdoh else 0.0
-            housing_val = round(float(sdoh.housing_burden_2022 or 0), 1) if sdoh else 0.0
-            income_val = round(float(sdoh.income_2022 or 0), 0) if sdoh else 0.0
-            unemp_val = round(float(sdoh.unemployment_2022 or 0), 1) if sdoh else 0.0
-            unins_val = round(float(sdoh.uninsured_2022 or 0), 1) if sdoh else 0.0
-            food_val = round(float(sdoh.food_access_population_2022 or 0), 1) if sdoh else 0.0
-            veh_val = round(float(sdoh.no_vehicle_2022 or 0), 1) if sdoh else 0.0
-            disab_val = round(float(sdoh.disability_2022 or 0), 1) if sdoh else 0.0
-            broad_val = round(float(sdoh.broadband_2022 or 0), 1) if sdoh else 0.0
-            edu_val = round(float(sdoh.education_2022 or 0), 1) if sdoh else 0.0
+            pov_val = round(float(sdoh.poverty_rate or 0.0), 1) if sdoh else 0.0
+            housing_val = round(float(sdoh.housing_cost_burden or 0.0), 1) if sdoh else 0.0
+            income_val = round(float(sdoh.median_household_income or 0.0), 0) if sdoh else 0.0
+            unemp_val = round(float(sdoh.unemployment_rate or 0.0), 1) if sdoh else 0.0
+            unins_val = round(float(sdoh.uninsured_rate or 0.0), 1) if sdoh else 0.0
+            food_val = round(float(sdoh.low_access_population_rate or 0.0), 1) if sdoh else 0.0
+            veh_val = round(float(sdoh.no_vehicle_rate or 0.0), 1) if sdoh else 0.0
+            disab_val = round(float(sdoh.disability_rate or 0.0), 1) if sdoh else 0.0
+            broad_val = round(float(sdoh.no_internet_access_rate or 0.0), 1) if sdoh else 0.0
+            edu_val = 0.0
 
-            # Average future risk (1.0 to 5.0 scale)
+            # Average risk (1.0 to 5.0 scale)
             t_avg_future_risk = round(t_score_sum / t_members, 1) if t_members > 0 else 2.0
 
             # SDOH Environment classification
@@ -968,18 +1224,20 @@ class CountyRiskMapView(APIView):
 
             t_priority_score = int(min(98, max(25, (90 if t_status == 'Critical' else (78 if t_status == 'Elevated' else (55 if t_status == 'Moderate' else 28))) + (pov_val * 0.2))))
 
-            # Aggregate stored per-patient SHAP drivers for this tract (fast — no ML inference)
-            tract_patient_ids = [p.id for p in tract_patients_only]
-            t_sdoh_drivers, t_clin_drivers = compute_shap_from_stored_predictions(tract_patient_ids, pred_map)
+            # Aggregate stored per-patient SHAP drivers for this tract
+            t_sdoh_drivers, t_clin_drivers = compute_current_population_drivers(tract_patients_only, pred_map)
 
             t_top_drivers = []
-            for d_name, d_cnt in sorted(t_driver_counts.items(), key=lambda x: -x[1])[:3]:
-                t_top_drivers.append({
-                    "name": d_name,
-                    "count": d_cnt,
-                    "percentage": int(round(d_cnt / t_members * 100)),
-                    "color": "bg-error" if "Inpatient" in d_name or "Emergency" in d_name or "Severe" in d_name else "bg-primary"
-                })
+            if first_pred:
+                drv, drv_t = get_current_prediction_driver(first_pred)
+            else:
+                drv, drv_t = 'Tract SDOH Factors', 'SDOH'
+            t_top_drivers.append({
+                "name": drv,
+                "count": t_members,
+                "percentage": 100,
+                "color": "bg-primary"
+            })
 
             tract_list.append({
                 "id": tract_fips,
@@ -999,8 +1257,8 @@ class CountyRiskMapView(APIView):
                 "sdoh_environment": t_sdoh_env,
                 "future_risk_5_breakdown": counts_5,
                 "future_risk_3_breakdown": counts_3,
-                "primary_driver": first_eval.get("driver", "SDOH Factors"),
-                "driver_type": first_eval.get("driver_type", "SDOH"),
+                "primary_driver": drv,
+                "driver_type": drv_t,
                 "sdoh_metrics": {
                     "poverty": pov_val,
                     "housing_burden": housing_val,
@@ -1056,21 +1314,29 @@ class CountyDetailRiskView(APIView):
     - Full list of members residing in that county
     """
     def get(self, request, county_id):
-        engine = get_prediction_engine()
+        import logging
+        logger = logging.getLogger(__name__)
+
+        from .current_prediction_engine import get_current_engine
+        engine = get_current_engine()
+
         # Clean county ID search term
         cleaned_search = county_id.replace('-', ' ').replace('_', ' ').strip().lower()
         
-        # Match CommunitySDOH tracts for this county
-        sdoh_tracts = CommunitySDOH.objects.filter(county__icontains=cleaned_search)
+        # Match CurrentCommunity tracts for this county
+        sdoh_tracts = CurrentCommunity.objects.filter(county_name__icontains=cleaned_search)
         tract_fips_list = [s.tract_fips for s in sdoh_tracts]
         
         # Match patients residing in these tracts
-        patients = list(Patient.objects.filter(tract_fips__in=tract_fips_list).order_by('patient_id'))
+        patients = list(CurrentPatient.objects.filter(FIPS_ID__in=tract_fips_list).order_by('PATIENT_ID'))
         
-        # If no patients by tract match directly, search patient.community_sdoh.county
+        # Fallback search if no patients by tract match directly
         if not patients:
-            all_patients = Patient.objects.all()
-            patients = [p for p in all_patients if p.community_sdoh and cleaned_search in (p.community_sdoh.county or '').lower()]
+            all_patients = CurrentPatient.objects.all()
+            for p in all_patients:
+                comm = CurrentCommunity.objects.filter(tract_fips=p.FIPS_ID).first()
+                if comm and cleaned_search in (comm.county_name or '').lower():
+                    patients.append(p)
 
         if not patients:
             # Return empty structure gracefully with 200 OK so UI can show empty state without crashing
@@ -1101,9 +1367,12 @@ class CountyDetailRiskView(APIView):
                 "member_list": []
             }, status=status.HTTP_200_OK)
 
-        county_name = patients[0].community_sdoh.county if patients[0].community_sdoh else f"{county_id.title()} County"
-        sdoh_map = {s.tract_fips: s for s in CommunitySDOH.objects.filter(tract_fips__in=[p.tract_fips for p in patients])}
-        pred_map = {pred.patient_id: pred for pred in PatientRiskPrediction.objects.filter(patient__in=patients)}
+        # Get county name from the first patient's community
+        first_comm = CurrentCommunity.objects.filter(tract_fips=patients[0].FIPS_ID).first()
+        county_name = first_comm.county_name if first_comm else f"{county_id.title()} County"
+
+        sdoh_map = {s.tract_fips: s for s in CurrentCommunity.objects.filter(tract_fips__in=[p.FIPS_ID for p in patients])}
+        pred_map = {pred.patient_id: pred for pred in CurrentPatientPrediction.objects.filter(patient__in=patients).order_by('prediction_timestamp')}
 
         counts_5 = {'Critical': 0, 'High': 0, 'Moderate': 0, 'Low': 0, 'Very Low': 0}
         counts_3 = {'High': 0, 'Moderate': 0, 'Low': 0}
@@ -1113,38 +1382,67 @@ class CountyDetailRiskView(APIView):
         housing_vals = []
         member_details = []
 
-        for p in patients:
-            pred = pred_map.get(p.id)
-            if pred and not is_prediction_stale(p, pred):
-                eval_res = prediction_to_dict(pred, patient=p)
-            else:
-                eval_res = engine.predict_patient(p, save_to_db=True, verbose=False)
+        risk_level_map = {
+            'VERY HIGH': 'Critical',
+            'CRITICAL': 'Critical',
+            'HIGH': 'High',
+            'MEDIUM': 'Moderate',
+            'LOW': 'Low',
+            'VERY LOW': 'Very Low'
+        }
+        level_3_map = {
+            'VERY HIGH': 'High',
+            'CRITICAL': 'High',
+            'HIGH': 'High',
+            'MEDIUM': 'Moderate',
+            'LOW': 'Low',
+            'VERY LOW': 'Low'
+        }
 
-            sdoh = sdoh_map.get(p.tract_fips)
-            level_5 = eval_res["future_risk_5"]["level"]
-            level_3 = eval_res["future_risk_3"]["level"]
+        for p in patients:
+            pred = pred_map.get(p.PATIENT_ID)
+            if not pred:
+                try:
+                    engine.predict_current_patient(p, save_to_db=True)
+                    pred = CurrentPatientPrediction.objects.filter(patient=p).order_by('-prediction_timestamp').first()
+                except Exception as e:
+                    logger.error(f"Failed to calculate current prediction for {p.PATIENT_ID}: {e}")
+
+            if pred:
+                pred_map[p.PATIENT_ID] = pred
+                level_5 = risk_level_map.get(pred.final_current_risk_level, 'Low')
+                level_3 = level_3_map.get(pred.final_current_risk_level, 'Low')
+                driver, driver_type = get_current_prediction_driver(pred)
+                priority = pred.intervention_priority if hasattr(pred, 'intervention_priority') else f"{level_5} priority intervention"
+            else:
+                level_5 = 'Low'
+                level_3 = 'Low'
+                driver = 'Tract SDOH Factors'
+                driver_type = 'SDOH'
+                priority = 'Low priority intervention'
 
             if level_5 in counts_5: counts_5[level_5] += 1
             if level_3 in counts_3: counts_3[level_3] += 1
             total_score_sum += risk_weights_5.get(level_5, 2.0)
 
+            sdoh = sdoh_map.get(p.FIPS_ID)
             if sdoh:
-                if sdoh.poverty_2022 is not None: poverty_vals.append(sdoh.poverty_2022)
-                if sdoh.housing_burden_2022 is not None: housing_vals.append(sdoh.housing_burden_2022)
+                if sdoh.poverty_rate is not None: poverty_vals.append(sdoh.poverty_rate)
+                if sdoh.housing_cost_burden is not None: housing_vals.append(sdoh.housing_cost_burden)
 
             member_details.append({
-                "id": p.patient_id,
-                "patient_id": p.patient_id,
-                "name": p.name or f"Patient {p.patient_id}",
-                "tract_fips": p.tract_fips,
+                "id": p.PATIENT_ID,
+                "patient_id": p.PATIENT_ID,
+                "name": p.PATIENT_NAME or f"Patient {p.PATIENT_ID}",
+                "tract_fips": p.FIPS_ID,
                 "future_risk_5": level_5,
                 "future_risk_3": level_3,
-                "driver": eval_res["driver"],
-                "driver_type": eval_res.get("driver_type", "SDOH"),
-                "priority": eval_res["intervention"]["action_headline"],
-                "encounters": int(p.encounters_last_12m or 0),
-                "ed_visits": int(p.emergency_visits_last_12m or 0),
-                "ip_visits": int(p.inpatient_admissions_last_12m or 0),
+                "driver": driver,
+                "driver_type": driver_type,
+                "priority": priority,
+                "encounters": int(p.EMERGENCY_VISITS or 0) + int(p.INPATIENT_ADMISSIONS or 0) + int(p.OUTPATIENT_VISITS or 0),
+                "ed_visits": int(p.EMERGENCY_VISITS or 0),
+                "ip_visits": int(p.INPATIENT_ADMISSIONS or 0),
             })
 
         total_members = len(patients)
@@ -1160,7 +1458,7 @@ class CountyDetailRiskView(APIView):
         else:
             sdoh_env = 'Low / Stable'
 
-        sdoh_drivers, clinical_drivers = compute_population_tree_shap(patients, engine)
+        sdoh_drivers, clinical_drivers = compute_current_population_drivers(patients, pred_map)
 
         return Response({
             "county": {
@@ -1231,6 +1529,12 @@ class OverviewView(APIView):
             for c in CurrentCommunity.objects.all()
         }
 
+        # Prefetch historical communities to map education rates
+        hist_communities_map = {
+            c.tract_fips: c
+            for c in CommunitySDOH.objects.all()
+        }
+
         high_5_count = 0
         high_3_count = 0
         high_sdoh_count = 0
@@ -1247,6 +1551,22 @@ class OverviewView(APIView):
         uninsured_list = []
         confidences_list = []
 
+        # Track risk level counts and feature averages dynamically
+        risk_level_counts = {
+            'Critical': 0,
+            'High': 0,
+            'Medium': 0,
+            'Low': 0,
+            'Very Low': 0
+        }
+        tier_stats = {
+            'Critical': {'clinical': [], 'social': [], 'deterioration': []},
+            'High': {'clinical': [], 'social': [], 'deterioration': []},
+            'Medium': {'clinical': [], 'social': [], 'deterioration': []},
+            'Low': {'clinical': [], 'social': [], 'deterioration': []},
+            'Very Low': {'clinical': [], 'social': [], 'deterioration': []}
+        }
+
         patient_priority_rows = []
 
         for p in current_patients:
@@ -1258,6 +1578,8 @@ class OverviewView(APIView):
             # Risk levels
             if latest_curr_pred:
                 level_5 = latest_curr_pred.final_current_risk_level
+                if level_5 == 'VERY HIGH':
+                    level_5 = 'CRITICAL'
                 score_5 = latest_curr_pred.final_current_risk_score
             else:
                 level_5 = 'LOW'
@@ -1274,7 +1596,7 @@ class OverviewView(APIView):
 
             confidences_list.append(conf_3)
 
-            is_high_5 = level_5 in ['VERY HIGH', 'HIGH', 'VERY_HIGH']
+            is_high_5 = level_5 in ['VERY HIGH', 'HIGH', 'VERY_HIGH', 'CRITICAL']
             is_high_3 = level_3 == 'High'
 
             if is_high_5:
@@ -1346,12 +1668,16 @@ class OverviewView(APIView):
             if pov >= 20.0 or house >= 30.0:
                 high_sdoh_count += 1
 
+            hist_sdoh = hist_communities_map.get(p.FIPS_ID)
+            edu_deficit = 100.0 - float(hist_sdoh.education_2022) if hist_sdoh and hist_sdoh.education_2022 is not None else 0.0
+
             if sdoh:
                 poverty_list.append(pov)
                 housing_list.append(house)
                 food_list.append(food)
                 vehicle_list.append(veh)
                 uninsured_list.append(unins)
+                education_list.append(edu_deficit)
 
             # Categorize clinical vs SDOH elevation
             if is_high_5:
@@ -1361,16 +1687,33 @@ class OverviewView(APIView):
                     elevated_by_sdoh += 1
 
             # Priority Score (0-100)
-            score_5_mapped = 90 if level_5 == 'VERY HIGH' else (75 if level_5 == 'HIGH' else (50 if level_5 == 'MEDIUM' else 25))
+            score_5_mapped = 90 if level_5 in ['VERY HIGH', 'CRITICAL'] else (75 if level_5 == 'HIGH' else (50 if level_5 == 'MEDIUM' else 25))
             sdoh_score = int(min(95, max(15, (pov * 1.5 + house * 1.0))))
             encounters = (p.EMERGENCY_VISITS or 0) + (p.INPATIENT_ADMISSIONS or 0) + (p.OUTPATIENT_VISITS or 0)
             clinical_score = int(min(98, max(10, encounters * 3 + int(p.EMERGENCY_VISITS or 0) * 15 + int(p.INPATIENT_ADMISSIONS or 0) * 25)))
+
+            # Increment counts for the 5 tiers and calculate clinical, social, and deterioration scores
+            display_level = 'Critical' if level_5 in ['VERY HIGH', 'CRITICAL'] else (
+                'High' if level_5 == 'HIGH' else (
+                    'Medium' if level_5 == 'MEDIUM' else (
+                        'Low' if level_5 == 'LOW' else 'Very Low'
+                    )
+                )
+            )
+            risk_level_counts[display_level] += 1
+            
+            # Deterioration score mapping
+            det_score = 88 if level_3 == 'High' else (62 if level_3 == 'Moderate' else (28 if level_3 == 'Low' else 15))
+            
+            tier_stats[display_level]['clinical'].append(clinical_score)
+            tier_stats[display_level]['social'].append(sdoh_score)
+            tier_stats[display_level]['deterioration'].append(det_score)
 
             patient_priority_rows.append({
                 "id": p.PATIENT_ID,
                 "name": p.PATIENT_NAME or f"Patient {p.PATIENT_ID}",
                 "priority": level_5,
-                "priorityColor": "bg-error/10 text-error border-error/20" if level_5 in ['VERY HIGH', 'HIGH'] else ("bg-amber-100 text-amber-800 border-amber-200" if level_5 == 'MEDIUM' else "bg-teal-100 text-teal-800 border-teal-200"),
+                "priorityColor": "bg-error/10 text-error border-error/20" if level_5 in ['VERY HIGH', 'HIGH', 'CRITICAL'] else ("bg-amber-100 text-amber-800 border-amber-200" if level_5 == 'MEDIUM' else "bg-teal-100 text-teal-800 border-teal-200"),
                 "clinical": f"{clinical_score}%",
                 "social": f"{sdoh_score}%",
                 "future_risk_5": level_5,
@@ -1390,11 +1733,10 @@ class OverviewView(APIView):
         # Summary Cards
         summary_cards = [
             { "title": "Total Members", "value": str(total_patients), "trend": "up", "subtext": f"{total_patients} enrolled in cohort", "trendType": "up" },
-            { "title": "High Future Risk (5-Class)", "value": str(high_5_count), "trend": "up", "subtext": f"{round(high_5_count/total_patients*100, 1)}% of total cohort", "trendType": "up" },
+            { "title": "High Current Risk", "value": str(high_5_count), "trend": "up", "subtext": f"{round(high_5_count/total_patients*100, 1)}% of total cohort", "trendType": "up" },
             { "title": "High Social Risk", "value": str(high_sdoh_count), "trend": "flat", "subtext": f"{round(high_sdoh_count/total_patients*100, 1)}% high-need census tracts", "trendType": "flat" },
-            { "title": "High Future Risk (3-Class)", "value": str(high_3_count), "trend": "up", "subtext": f"{round(high_3_count/total_patients*100, 1)}% CatBoost forecast", "trendType": "up" },
-            { "title": "Priority Members", "value": str(high_priority_count), "trend": "down", "subtext": "Immediate outreach required", "trendType": "down" },
-            { "title": "Interventions Actioned", "value": str(int(round(high_priority_count * 0.8))), "trend": "up", "subtext": "Active care pathways", "trendType": "up" }
+            { "title": "High Future Risk", "value": str(high_3_count), "trend": "up", "subtext": f"{round(high_3_count/total_patients*100, 1)}% CatBoost forecast", "trendType": "up" },
+            { "title": "Priority Members", "value": str(high_priority_count), "trend": "down", "subtext": "Immediate outreach required", "trendType": "down" }
         ]
 
         # Population Risk Synthesis
@@ -1409,7 +1751,7 @@ class OverviewView(APIView):
         high_house_pct = int(round(len([v for v in housing_list if v >= 25.0]) / total_patients * 100)) if housing_list else 38
         high_food_pct = int(round(len([v for v in food_list if v >= 20.0]) / total_patients * 100)) if food_list else 25
         high_veh_pct = int(round(len([v for v in vehicle_list if v >= 10.0]) / total_patients * 100)) if vehicle_list else 22
-        high_edu_pct = 15
+        high_edu_pct = int(round(len([v for v in education_list if v >= 15.0]) / total_patients * 100)) if education_list else 15
         high_unins_pct = int(round(len([v for v in uninsured_list if v >= 10.0]) / total_patients * 100)) if uninsured_list else 12
 
         social_drivers = [
@@ -1419,6 +1761,87 @@ class OverviewView(APIView):
             { "name": "Transportation & No-Vehicle", "percentage": high_veh_pct, "color": "bg-primary", "text": f"{high_veh_pct}% Moderate Risk" },
             { "name": "Education Deficits", "percentage": high_edu_pct, "color": "bg-secondary", "text": f"{high_edu_pct}% Low Risk" },
             { "name": "Healthcare & Uninsured Rate", "percentage": high_unins_pct, "color": "bg-secondary", "text": f"{high_unins_pct}% Low Risk" },
+        ]
+
+        # Calculate averages for each risk tier
+        def get_avg(lst, default):
+            return int(round(sum(lst)/len(lst))) if lst else default
+
+        risk_distribution = [
+            {
+                "name": "Critical",
+                "value": risk_level_counts['Critical'],
+                "color": "#ba1a1a",
+                "clinical": get_avg(tier_stats['Critical']['clinical'], 85),
+                "social": get_avg(tier_stats['Critical']['social'], 75),
+                "deterioration": get_avg(tier_stats['Critical']['deterioration'], 90),
+                "meaning": "Immediate Intervention",
+                "actions": [
+                    "Clinical assessment by provider within 24 hours",
+                    "Nurse outreach for symptom checklist",
+                    "Medication reconciliation review",
+                    "SDOH barriers screening (housing/food)",
+                    "Arrange urgent transportation assistance"
+                ]
+            },
+            {
+                "name": "High",
+                "value": risk_level_counts['High'],
+                "color": "#ff7900",
+                "clinical": get_avg(tier_stats['High']['clinical'], 70),
+                "social": get_avg(tier_stats['High']['social'], 60),
+                "deterioration": get_avg(tier_stats['High']['deterioration'], 70),
+                "meaning": "Active Care Management",
+                "actions": [
+                    "Designated care manager assignment",
+                    "Regular telehealth wellness checks",
+                    "Coordinate community SDOH support services",
+                    "Primary care follow-up scheduling",
+                    "Medication adherence support"
+                ]
+            },
+            {
+                "name": "Medium",
+                "value": risk_level_counts['Medium'],
+                "color": "#f1c40f",
+                "clinical": get_avg(tier_stats['Medium']['clinical'], 50),
+                "social": get_avg(tier_stats['Medium']['social'], 45),
+                "deterioration": get_avg(tier_stats['Medium']['deterioration'], 45),
+                "meaning": "Preventive Intervention",
+                "actions": [
+                    "Provide disease-specific education booklets",
+                    "Annual wellness and screening coordination",
+                    "Enroll in local nutrition or fitness classes",
+                    "Assess minor social barriers dynamically"
+                ]
+            },
+            {
+                "name": "Low",
+                "value": risk_level_counts['Low'],
+                "color": "#005599",
+                "clinical": get_avg(tier_stats['Low']['clinical'], 30),
+                "social": get_avg(tier_stats['Low']['social'], 30),
+                "deterioration": get_avg(tier_stats['Low']['deterioration'], 20),
+                "meaning": "Routine Monitoring",
+                "actions": [
+                    "Automated portal check-ins",
+                    "Standard screening reminder alerts",
+                    "Preventive care checklist updates"
+                ]
+            },
+            {
+                "name": "Very Low",
+                "value": risk_level_counts['Very Low'],
+                "color": "#046a64",
+                "clinical": get_avg(tier_stats['Very Low']['clinical'], 15),
+                "social": get_avg(tier_stats['Very Low']['social'], 15),
+                "deterioration": get_avg(tier_stats['Very Low']['deterioration'], 10),
+                "meaning": "Maintain & Monitor",
+                "actions": [
+                    "General health newsletter updates",
+                    "Standard wellness portal account features"
+                ]
+            }
         ]
 
         return Response({
@@ -1431,6 +1854,7 @@ class OverviewView(APIView):
                 "model_confidence_pct": avg_conf
             },
             "social_drivers": social_drivers,
+            "risk_distribution": risk_distribution,
             "sdoh_impact": {
                 "clinical_only_high": clinical_only_high,
                 "elevated_by_sdoh": elevated_by_sdoh,
@@ -1484,6 +1908,8 @@ class InterventionsView(APIView):
             # Risk levels
             if latest_curr_pred:
                 level_5 = latest_curr_pred.final_current_risk_level
+                if level_5 == 'VERY HIGH':
+                    level_5 = 'CRITICAL'
                 score_5 = latest_curr_pred.final_current_risk_score
             else:
                 level_5 = 'LOW'
@@ -2003,8 +2429,8 @@ class CommunityCountyListView(APIView):
         agg = CurrentCommunity.objects.values('state_county_fips', 'county_name').annotate(
             total_tracts=Count('tract_fips'),
             avg_risk=Avg('community_risk_score'),
-            high_tracts=Count('tract_fips', filter=Q(community_risk_level__in=['HIGH', 'VERY HIGH'])),
-            vhigh_tracts=Count('tract_fips', filter=Q(community_risk_level='VERY HIGH'))
+            high_tracts=Count('tract_fips', filter=Q(community_risk_level__in=['HIGH', 'VERY HIGH', 'CRITICAL'])),
+            vhigh_tracts=Count('tract_fips', filter=Q(community_risk_level__in=['VERY HIGH', 'CRITICAL']))
         ).order_by('-avg_risk')
 
         counties = []
@@ -2016,7 +2442,7 @@ class CommunityCountyListView(APIView):
             vhigh = c['vhigh_tracts']
             
             if avg_risk >= 30.0:
-                risk_level = 'VERY HIGH'
+                risk_level = 'CRITICAL'
                 priority = 'Critical'
             elif avg_risk >= 27.0:
                 risk_level = 'HIGH'
@@ -2089,8 +2515,8 @@ class CommunityCountyDetailView(APIView):
         from django.db.models import Avg, Count, Q
         stats = tracts.aggregate(
             avg_risk=Avg('community_risk_score'),
-            high_tracts=Count('tract_fips', filter=Q(community_risk_level__in=['HIGH', 'VERY HIGH'])),
-            vhigh_tracts=Count('tract_fips', filter=Q(community_risk_level='VERY HIGH'))
+            high_tracts=Count('tract_fips', filter=Q(community_risk_level__in=['HIGH', 'VERY HIGH', 'CRITICAL'])),
+            vhigh_tracts=Count('tract_fips', filter=Q(community_risk_level__in=['VERY HIGH', 'CRITICAL']))
         )
         
         avg_risk = stats['avg_risk'] or 0.0
@@ -2099,7 +2525,7 @@ class CommunityCountyDetailView(APIView):
         vhigh = stats['vhigh_tracts']
 
         if avg_risk >= 30.0:
-            risk_level = 'VERY HIGH'
+            risk_level = 'CRITICAL'
             priority = 'Critical'
         elif avg_risk >= 27.0:
             risk_level = 'HIGH'
@@ -2270,7 +2696,7 @@ class CommunityCountyInterventionsView(APIView):
         avg_risk = tracts.aggregate(avg=Avg('community_risk_score'))['avg'] or 0.0
         
         if avg_risk >= 30.0:
-            risk_level = 'VERY HIGH'
+            risk_level = 'CRITICAL'
         elif avg_risk >= 27.0:
             risk_level = 'HIGH'
         elif avg_risk >= 24.0:
@@ -2369,7 +2795,7 @@ class CommunityInterventionGenerateView(APIView):
         avg_risk = tracts.aggregate(avg=Avg('community_risk_score'))['avg'] or 0.0
         
         if avg_risk >= 30.0:
-            risk_level = 'VERY HIGH'
+            risk_level = 'CRITICAL'
             priority = 'CRITICAL'
         elif avg_risk >= 27.0:
             risk_level = 'HIGH'
@@ -2769,5 +3195,368 @@ class StaffDetailView(APIView):
                 'role': staff.role
             }
         }, status=status.HTTP_200_OK)
+
+
+class CurrentPatientUploadView(APIView):
+    """
+    POST /api/current-patients/upload/
+    
+    Handles Excel sheet upload (bulk patients) and PDF chart extraction (OpenAI GPT).
+    """
+    def post(self, request):
+        import logging
+        import pandas as pd
+        import os
+        import json
+        from openai import OpenAI
+        from rest_framework.parsers import MultiPartParser, FormParser
+        from .current_prediction_engine import get_current_engine
+        from .models import Patient
+        from .ml_engine import get_prediction_engine
+        
+        logger = logging.getLogger(__name__)
+        engine = get_current_engine()
+        engine_hist = get_prediction_engine()
+        
+        upload_type = request.data.get('type', 'excel').lower()
+        file_obj = request.FILES.get('file')
+        
+        if not file_obj:
+            return Response({"error": "No file uploaded"}, status=status.HTTP_400_BAD_REQUEST)
+            
+        # 1. EXCEL UPLOAD PATHWAY
+        if upload_type == 'excel':
+            try:
+                # Read using pandas
+                df = pd.read_excel(file_obj)
+                
+                # Normalize column headers case-insensitively and space-insensitively
+                normalized_cols = {}
+                for col in df.columns:
+                    c_norm = str(col).strip().upper().replace(' ', '_').replace('-', '_')
+                    if c_norm in ['PATIENTID', 'PATIENT_ID', 'ID']:
+                        normalized_cols[col] = 'PATIENT_ID'
+                    elif c_norm in ['FIPSID', 'FIPS_ID', 'FIPS', 'TRACT_FIPS', 'TRACT_ID']:
+                        normalized_cols[col] = 'FIPS_ID'
+                    elif c_norm in ['PATIENTNAME', 'PATIENT_NAME', 'NAME']:
+                        normalized_cols[col] = 'PATIENT_NAME'
+                    elif c_norm in ['STATENAME', 'STATE_NAME', 'STATE']:
+                        normalized_cols[col] = 'STATE_NAME'
+                    elif c_norm in ['AGE']:
+                        normalized_cols[col] = 'AGE'
+                    elif c_norm in ['GENDER']:
+                        normalized_cols[col] = 'GENDER'
+                    elif c_norm in ['CHRONICCONDITIONS', 'CHRONIC_CONDITIONS', 'CHRONIC']:
+                        normalized_cols[col] = 'CHRONIC_CONDITIONS'
+                    elif c_norm in ['CONDITIONS', 'DIAGNOSES']:
+                        normalized_cols[col] = 'CONDITIONS'
+                    elif c_norm in ['INPATIENTADMISSIONS', 'INPATIENT_ADMISSIONS', 'INPATIENT', 'INPATIENT_VISITS']:
+                        normalized_cols[col] = 'INPATIENT_ADMISSIONS'
+                    elif c_norm in ['EMERGENCYVISITS', 'EMERGENCY_VISITS', 'EMERGENCY', 'ED_VISITS']:
+                        normalized_cols[col] = 'EMERGENCY_VISITS'
+                    elif c_norm in ['OUTPATIENTVISITS', 'OUTPATIENT_VISITS', 'OUTPATIENT']:
+                        normalized_cols[col] = 'OUTPATIENT_VISITS'
+                    elif c_norm in ['MEDICATIONS', 'MEDS']:
+                        normalized_cols[col] = 'MEDICATIONS'
+                    elif c_norm in ['PROCEDURES']:
+                        normalized_cols[col] = 'PROCEDURES'
+                    elif c_norm in ['MEDICATIONSPERENCOUNTER', 'MEDICATIONS_PER_ENCOUNTER']:
+                        normalized_cols[col] = 'MEDICATIONS_PER_ENCOUNTER'
+                    elif c_norm in ['CONDITIONSPERENCOUNTER', 'CONDITIONS_PER_ENCOUNTER']:
+                        normalized_cols[col] = 'CONDITIONS_PER_ENCOUNTER'
+                
+                df = df.rename(columns=normalized_cols)
+                
+                # Check for required columns
+                required_cols = ['PATIENT_ID', 'FIPS_ID']
+                missing_cols = [col for col in required_cols if col not in df.columns]
+                if missing_cols:
+                    return Response({
+                        "error": f"Missing required columns in Excel: {', '.join(missing_cols)}"
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                
+                patients_created = []
+                for _, row in df.iterrows():
+                    p_id = str(row['PATIENT_ID']).strip()
+                    fips = str(row['FIPS_ID']).strip().split('.')[0].zfill(11) # handle floats or standard formats
+                    
+                    if not p_id or not fips or p_id.lower() == 'nan' or fips.lower() == 'nan':
+                        continue
+                        
+                    # Extract fields with safe fallbacks
+                    p_name = str(row.get('PATIENT_NAME', '')).strip() if 'PATIENT_NAME' in df.columns and pd.notna(row['PATIENT_NAME']) else f"Patient {p_id}"
+                    state_name = str(row.get('STATE_NAME', 'California')).strip() if 'STATE_NAME' in df.columns and pd.notna(row['STATE_NAME']) else 'California'
+                    
+                    age = None
+                    if 'AGE' in df.columns and pd.notna(row['AGE']):
+                        try: age = int(row['AGE'])
+                        except: pass
+                        
+                    gender = str(row.get('GENDER', 'Unknown')).strip() if 'GENDER' in df.columns and pd.notna(row['GENDER']) else 'Unknown'
+                    
+                    def safe_int(col_name):
+                        if col_name in df.columns and pd.notna(row[col_name]):
+                            try: return int(row[col_name])
+                            except: return 0
+                        return 0
+                        
+                    chronic = safe_int('CHRONIC_CONDITIONS')
+                    conditions = safe_int('CONDITIONS')
+                    inpatient = safe_int('INPATIENT_ADMISSIONS')
+                    emergency = safe_int('EMERGENCY_VISITS')
+                    outpatient = safe_int('OUTPATIENT_VISITS')
+                    meds = safe_int('MEDICATIONS')
+                    procs = safe_int('PROCEDURES')
+                    
+                    encounters = max(1, inpatient + emergency + outpatient)
+                    
+                    if 'MEDICATIONS_PER_ENCOUNTER' in df.columns and pd.notna(row['MEDICATIONS_PER_ENCOUNTER']):
+                        try: meds_per_enc = float(row['MEDICATIONS_PER_ENCOUNTER'])
+                        except: meds_per_enc = float(meds) / encounters
+                    else:
+                        meds_per_enc = float(meds) / encounters
+                        
+                    if 'CONDITIONS_PER_ENCOUNTER' in df.columns and pd.notna(row['CONDITIONS_PER_ENCOUNTER']):
+                        try: cond_per_enc = float(row['CONDITIONS_PER_ENCOUNTER'])
+                        except: cond_per_enc = float(conditions) / encounters
+                    else:
+                        cond_per_enc = float(conditions) / encounters
+                    
+                    # Generate a unique ID if it already exists to guarantee it is added as a new patient
+                    original_p_id = p_id
+                    suffix_counter = 1
+                    while CurrentPatient.objects.filter(PATIENT_ID=p_id).exists():
+                        p_id = f"{original_p_id}_{suffix_counter}"
+                        suffix_counter += 1
+                        
+                    patient = CurrentPatient.objects.create(
+                        PATIENT_ID=p_id,
+                        PATIENT_NAME=p_name,
+                        FIPS_ID=fips,
+                        STATE_NAME=state_name,
+                        AGE=age,
+                        GENDER=gender,
+                        CHRONIC_CONDITIONS=chronic,
+                        CONDITIONS=conditions,
+                        INPATIENT_ADMISSIONS=inpatient,
+                        EMERGENCY_VISITS=emergency,
+                        OUTPATIENT_VISITS=outpatient,
+                        MEDICATIONS=meds,
+                        PROCEDURES=procs,
+                        MEDICATIONS_PER_ENCOUNTER=meds_per_enc,
+                        CONDITIONS_PER_ENCOUNTER=cond_per_enc
+                    )
+                    
+                    # Create corresponding Patient model record to run CatBoost future predictions
+                    patient_hist = Patient.objects.create(
+                        patient_id=p_id,
+                        name=p_name,
+                        tract_fips=fips,
+                        encounters_last_12m=float(encounters),
+                        inpatient_admissions_last_12m=float(inpatient),
+                        emergency_visits_last_12m=float(emergency),
+                        outpatient_visits_last_12m=float(outpatient),
+                        conditions_last_12m=float(conditions),
+                        chronic_conditions_last_12m=float(chronic),
+                        medications_last_12m=float(meds),
+                        procedures_last_12m=float(procs),
+                        medications_per_encounter_last_12m=meds_per_enc,
+                        conditions_per_encounter_last_12m=cond_per_enc,
+                        gender_f=1.0 if gender.lower() == 'female' else 0.0,
+                        gender_m=1.0 if gender.lower() == 'male' else 0.0,
+                        change_recent_vs_previous_encounters=0.0,
+                        growth_recent_vs_previous_encounters=0.0,
+                        change_recent_vs_previous_conditions=0.0,
+                        growth_recent_vs_previous_conditions=0.0,
+                        change_recent_vs_previous_chronic_conditions=0.0,
+                        growth_recent_vs_previous_chronic_conditions=0.0,
+                        change_recent_vs_previous_medications=0.0,
+                        growth_recent_vs_previous_medications=0.0,
+                        change_recent_vs_previous_procedures=0.0,
+                        growth_recent_vs_previous_procedures=0.0,
+                        change_recent_vs_previous_clinical_burden=0.0,
+                        growth_recent_vs_previous_clinical_burden=0.0,
+                        change_recent_vs_previous_healthcare_utilization=0.0,
+                        growth_recent_vs_previous_healthcare_utilization=0.0,
+                        clinical_burden_last_12m=0.0,
+                        healthcare_utilization_last_12m=0.0
+                    )
+                    
+                    # Predict immediately
+                    engine.predict_current_patient(patient, save_to_db=True)
+                    engine_hist.predict_patient(patient_hist, save_to_db=True)
+                    patients_created.append(p_id)
+                
+                # Clear map cache
+                _MAP_CACHE.clear()
+                
+                return Response({
+                    "message": f"Successfully uploaded and processed {len(patients_created)} patients from Excel.",
+                    "patients": patients_created
+                }, status=status.HTTP_201_CREATED)
+                
+            except Exception as e:
+                logger.error(f"Excel processing failed: {e}", exc_info=True)
+                return Response({"error": f"Failed to process Excel file: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+                
+        # 2. PDF UPLOAD PATHWAY
+        elif upload_type == 'pdf':
+            try:
+                import pypdf
+                
+                # Load API key
+                api_key = os.getenv('OPENAI_API_KEY')
+                if not api_key:
+                    return Response({"error": "OPENAI_API_KEY is not configured in backend .env"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                
+                # Extract text using pypdf
+                reader = pypdf.PdfReader(file_obj)
+                text_content = ""
+                for page in reader.pages:
+                    text_content += page.extract_text() or ""
+                    
+                if not text_content.strip():
+                    return Response({"error": "Failed to extract text from the PDF chart. Make sure it is not an image-only scan."}, status=status.HTTP_400_BAD_REQUEST)
+                    
+                # Call OpenAI GPT-4o-mini with response_format JSON
+                client = OpenAI(api_key=api_key)
+                system_prompt = (
+                    "You are an expert clinical coding assistant. Parse the patient clinical chart text and extract "
+                    "demographics and healthcare service encounter counts. You MUST return a JSON object with these exact keys:\n"
+                    "- PATIENT_ID: extract unique patient id or generate a new unique one (e.g. TEST-CA-0125)\n"
+                    "- PATIENT_NAME: patient's full name\n"
+                    "- FIPS_ID: extract 11-digit zero-padded Census Tract FIPS code (e.g., 06037599100) if found, else default to '06067004203'\n"
+                    "- AGE: patient age (integer)\n"
+                    "- GENDER: patient gender (e.g. Male, Female, Other)\n"
+                    "- CHRONIC_CONDITIONS: count of active chronic conditions (integer)\n"
+                    "- CONDITIONS: total number of distinct diagnoses/conditions/problems (integer)\n"
+                    "- INPATIENT_ADMISSIONS: count of inpatient hospital admissions in the past 12m (integer)\n"
+                    "- EMERGENCY_VISITS: count of ER visits in the past 12m (integer)\n"
+                    "- OUTPATIENT_VISITS: count of outpatient clinic visits in the past 12m (integer)\n"
+                    "- MEDICATIONS: count of active current medications (integer)\n"
+                    "- PROCEDURES: count of surgical or medical procedures performed in the past 12m (integer)"
+                )
+                
+                completion = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    response_format={"type": "json_object"},
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"Here is the patient clinical chart text:\n\n{text_content[:8000]}"}
+                    ],
+                    temperature=0.0
+                )
+                
+                extracted_data = json.loads(completion.choices[0].message.content)
+                
+                # Clean and save the patient
+                p_id = str(extracted_data.get('PATIENT_ID', '')).strip()
+                if not p_id or p_id.lower() == 'nan':
+                    import uuid
+                    p_id = f"TEST-CA-{str(uuid.uuid4())[:4]}"
+                    
+                fips = str(extracted_data.get('FIPS_ID', '06067004203')).strip().split('.')[0].zfill(11)
+                
+                p_name = str(extracted_data.get('PATIENT_NAME', '')).strip() or f"Patient {p_id}"
+                state_name = 'California'
+                
+                age = extracted_data.get('AGE')
+                try: age = int(age) if age is not None else None
+                except: age = None
+                
+                gender = str(extracted_data.get('GENDER', 'Unknown')).strip()
+                
+                chronic = int(extracted_data.get('CHRONIC_CONDITIONS', 0))
+                conditions = int(extracted_data.get('CONDITIONS', 0))
+                inpatient = int(extracted_data.get('INPATIENT_ADMISSIONS', 0))
+                emergency = int(extracted_data.get('EMERGENCY_VISITS', 0))
+                outpatient = int(extracted_data.get('OUTPATIENT_VISITS', 0))
+                meds = int(extracted_data.get('MEDICATIONS', 0))
+                procs = int(extracted_data.get('PROCEDURES', 0))
+                
+                encounters = max(1, inpatient + emergency + outpatient)
+                meds_per_enc = float(meds) / encounters
+                cond_per_enc = float(conditions) / encounters
+                
+                # Generate unique ID if already exists to guarantee it is added as a new patient
+                original_p_id = p_id
+                suffix_counter = 1
+                while CurrentPatient.objects.filter(PATIENT_ID=p_id).exists():
+                    p_id = f"{original_p_id}_{suffix_counter}"
+                    suffix_counter += 1
+                    
+                patient = CurrentPatient.objects.create(
+                    PATIENT_ID=p_id,
+                    PATIENT_NAME=p_name,
+                    FIPS_ID=fips,
+                    STATE_NAME=state_name,
+                    AGE=age,
+                    GENDER=gender,
+                    CHRONIC_CONDITIONS=chronic,
+                    CONDITIONS=conditions,
+                    INPATIENT_ADMISSIONS=inpatient,
+                    EMERGENCY_VISITS=emergency,
+                    OUTPATIENT_VISITS=outpatient,
+                    MEDICATIONS=meds,
+                    PROCEDURES=procs,
+                    MEDICATIONS_PER_ENCOUNTER=meds_per_enc,
+                    CONDITIONS_PER_ENCOUNTER=cond_per_enc
+                )
+                
+                # Create corresponding Patient model record to run CatBoost future predictions
+                patient_hist = Patient.objects.create(
+                    patient_id=p_id,
+                    name=p_name,
+                    tract_fips=fips,
+                    encounters_last_12m=float(encounters),
+                    inpatient_admissions_last_12m=float(inpatient),
+                    emergency_visits_last_12m=float(emergency),
+                    outpatient_visits_last_12m=float(outpatient),
+                    conditions_last_12m=float(conditions),
+                    chronic_conditions_last_12m=float(chronic),
+                    medications_last_12m=float(meds),
+                    procedures_last_12m=float(procs),
+                    medications_per_encounter_last_12m=meds_per_enc,
+                    conditions_per_encounter_last_12m=cond_per_enc,
+                    gender_f=1.0 if gender.lower() == 'female' else 0.0,
+                    gender_m=1.0 if gender.lower() == 'male' else 0.0,
+                    change_recent_vs_previous_encounters=0.0,
+                    growth_recent_vs_previous_encounters=0.0,
+                    change_recent_vs_previous_conditions=0.0,
+                    growth_recent_vs_previous_conditions=0.0,
+                    change_recent_vs_previous_chronic_conditions=0.0,
+                    growth_recent_vs_previous_chronic_conditions=0.0,
+                    change_recent_vs_previous_medications=0.0,
+                    growth_recent_vs_previous_medications=0.0,
+                    change_recent_vs_previous_procedures=0.0,
+                    growth_recent_vs_previous_procedures=0.0,
+                    change_recent_vs_previous_clinical_burden=0.0,
+                    growth_recent_vs_previous_clinical_burden=0.0,
+                    change_recent_vs_previous_healthcare_utilization=0.0,
+                    growth_recent_vs_previous_healthcare_utilization=0.0,
+                    clinical_burden_last_12m=0.0,
+                    healthcare_utilization_last_12m=0.0
+                )
+                
+                # Predict
+                engine.predict_current_patient(patient, save_to_db=True)
+                engine_hist.predict_patient(patient_hist, save_to_db=True)
+                
+                # Clear map cache
+                _MAP_CACHE.clear()
+                
+                return Response({
+                    "message": f"Successfully parsed clinical chart PDF via AI and added patient {p_name} ({p_id}).",
+                    "patient_id": p_id,
+                    "patient_name": p_name,
+                    "extracted_data": extracted_data
+                }, status=status.HTTP_201_CREATED)
+                
+            except Exception as e:
+                logger.error(f"PDF AI extraction failed: {e}", exc_info=True)
+                return Response({"error": f"Failed to extract details from PDF: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+                
+        else:
+            return Response({"error": "Unsupported upload type. Choose either 'excel' or 'pdf'."}, status=status.HTTP_400_BAD_REQUEST)
 
 
