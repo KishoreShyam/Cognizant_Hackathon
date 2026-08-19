@@ -1,0 +1,16 @@
+{
+    "features": [
+        "AGE",
+        "GENDER",
+        "CHRONIC_CONDITIONS",
+        "CONDITIONS",
+        "INPATIENT_ADMISSIONS",
+        "EMERGENCY_VISITS",
+        "OUTPATIENT_VISITS",
+        "MEDICATIONS",
+        "PROCEDURES",
+        "MEDICATIONS_PER_ENCOUNTER",
+        "CONDITIONS_PER_ENCOUNTER"
+    ],
+    "feature_count": 11
+}
